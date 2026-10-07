@@ -78,6 +78,7 @@ import com.example.core.ledger.AccountConstants
 import com.example.core.model.CurrencyCode
 import com.example.core.model.ExchangeRate
 import com.example.core.model.Money
+import com.example.core.model.RateZone
 import com.example.data.ledger.PurchaseItemSpec
 import com.example.data.local.AppDatabase
 import com.example.data.local.entity.AssetEntity
@@ -682,20 +683,28 @@ fun NewPurchaseBottomSheet(
     val effectiveResolver = resolver ?: remember { ExchangeRateResolver(AppDatabase.getInstance(context)) }
     var selectedVendorId by rememberSaveable { mutableStateOf(parties.firstOrNull { it.isVendor }?.id ?: AppDatabase.WALK_IN_CASH_PARTY_ID) }
     var selectedCurrency by rememberSaveable { mutableStateOf(CurrencyCode.USD) }
+    var selectedZone by rememberSaveable { mutableStateOf(RateZone.SANAA) }
     var resolvedRate by remember { mutableStateOf<ExchangeRate?>(null) }
+    var manualRateOverride by remember { mutableStateOf<ExchangeRate?>(null) }
+    var showManualRateDialog by remember { mutableStateOf(false) }
+    var manualRateInputText by remember { mutableStateOf("") }
+    var manualOverrideReason by remember { mutableStateOf("") }
     val today = remember { java.time.LocalDate.now().toEpochDay() }
 
-    LaunchedEffect(selectedCurrency) {
+    LaunchedEffect(selectedCurrency, selectedZone) {
+        manualRateOverride = null
         if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
             resolvedRate = ExchangeRate.parity(CurrencyCode.FUNCTIONAL)
         } else {
             try {
-                resolvedRate = effectiveResolver.resolve(selectedCurrency, today)
+                resolvedRate = effectiveResolver.resolve(selectedCurrency, today, selectedZone)
             } catch (e: Exception) {
-                resolvedRate = null
+                resolvedRate = effectiveResolver.resolveOrNull(selectedCurrency, today, selectedZone)
             }
         }
     }
+
+    val effectiveRate = manualRateOverride ?: resolvedRate
 
     var itemDesc by rememberSaveable { mutableStateOf("") }
     var itemQtyText by rememberSaveable { mutableStateOf("1") }
@@ -753,7 +762,17 @@ fun NewPurchaseBottomSheet(
                 if (selectedCurrency != CurrencyCode.FUNCTIONAL) {
                     ExchangeRateCard(
                         currency = selectedCurrency,
-                        rate = resolvedRate
+                        rate = effectiveRate,
+                        zone = selectedZone,
+                        onZoneToggle = {
+                            selectedZone = if (selectedZone == RateZone.SANAA) RateZone.ADEN else RateZone.SANAA
+                            manualRateOverride = null
+                        },
+                        onEditRateClick = {
+                            manualRateInputText = effectiveRate?.let { ExchangeRate.formatRateMicros(it.rateMicros) } ?: ""
+                            manualOverrideReason = "سعر صراف معتمد / تقلبات سوق"
+                            showManualRateDialog = true
+                        }
                     )
                 }
 
@@ -832,6 +851,60 @@ fun NewPurchaseBottomSheet(
                     }
                 }
 
+                val totalForeignMinor = itemsList.sumOf { it.quantity * it.unitPriceMinor }
+                val totalYerMinor = if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
+                    totalForeignMinor
+                } else {
+                    effectiveRate?.convert(totalForeignMinor) ?: 0L
+                }
+
+                if (itemsList.isNotEmpty()) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                        modifier = Modifier.fillMaxWidth().testTag("purchase_totals_summary_card")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("إجمالي الفاتورة (${selectedCurrency.name}):", fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    Money(totalForeignMinor, selectedCurrency).format(),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            if (selectedCurrency != CurrencyCode.FUNCTIONAL) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "المعادل بالريال اليمني (${if (selectedZone == RateZone.SANAA) "صنعاء" else "عدن"}):",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        Money(totalYerMinor, CurrencyCode.FUNCTIONAL).format(),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 15.sp,
+                                        color = SemanticIncomeGreen
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 OutlinedTextField(
                     value = notes,
                     onValueChange = { notes = it },
@@ -855,12 +928,12 @@ fun NewPurchaseBottomSheet(
                             val rate = if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
                                 ExchangeRate.parity(CurrencyCode.FUNCTIONAL)
                             } else {
-                                resolvedRate ?: error("Exchange rate not resolved for $selectedCurrency")
+                                effectiveRate ?: error("Exchange rate not resolved for $selectedCurrency")
                             }
                             onSubmit(selectedVendorId, selectedCurrency, rate, itemsList.toList(), notes)
                         }
                     },
-                    enabled = itemsList.isNotEmpty() && (selectedCurrency == CurrencyCode.FUNCTIONAL || resolvedRate != null),
+                    enabled = itemsList.isNotEmpty() && (selectedCurrency == CurrencyCode.FUNCTIONAL || effectiveRate != null),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.weight(1f).height(48.dp)
                 ) {
@@ -871,5 +944,53 @@ fun NewPurchaseBottomSheet(
                 }
             }
         }
+    }
+
+    if (showManualRateDialog) {
+        AlertDialog(
+            onDismissRequest = { showManualRateDialog = false },
+            title = { Text("تعديل سعر الصرف يدوياً", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "أدخل سعر الصرف المعتمد لـ 1 ${selectedCurrency.name} بالريال اليمني (YER) لتسعيرة ${if (selectedZone == RateZone.SANAA) "صنعاء" else "عدن"}:",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    OutlinedTextField(
+                        value = manualRateInputText,
+                        onValueChange = { manualRateInputText = it },
+                        label = { Text("سعر الصرف (مثال: 535.50 أو 1900)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("input_manual_exchange_rate")
+                    )
+                    OutlinedTextField(
+                        value = manualOverrideReason,
+                        onValueChange = { manualOverrideReason = it },
+                        label = { Text("سبب التعديل اليدوي") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("input_manual_rate_reason")
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val parsed = ExchangeRate.parseRateFromUserInput(manualRateInputText)
+                        if (parsed != null && parsed > 0L) {
+                            manualRateOverride = ExchangeRate(selectedCurrency, CurrencyCode.FUNCTIONAL, parsed)
+                            showManualRateDialog = false
+                        }
+                    },
+                    modifier = Modifier.testTag("btn_confirm_manual_rate")
+                ) {
+                    Text("تطبيق السعر")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showManualRateDialog = false }) {
+                    Text("إلغاء")
+                }
+            }
+        )
     }
 }

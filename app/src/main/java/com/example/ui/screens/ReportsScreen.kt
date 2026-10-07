@@ -78,6 +78,8 @@ import com.example.ui.theme.MikroTikCyan
 import com.example.ui.theme.AssetPurple
 import com.example.ui.theme.StatusOnline
 import com.example.ui.theme.StatusWarning
+import com.example.util.findActivity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -877,10 +879,19 @@ private fun CloudSyncAndBackupView(viewModel: AppViewModel) {
                             )
 
                             Button(
-                                onClick = { viewModel.signInWithGoogleOneTap(context) },
+                                onClick = {
+                                    val activity = context.findActivity()
+                                    if (activity != null) {
+                                        viewModel.signInWithGoogle(activity)
+                                    } else {
+                                        viewModel.signInWithGoogleOneTap(context)
+                                    }
+                                },
                                 colors = ButtonDefaults.buttonColors(containerColor = MikroTikCyan),
                                 shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("btn_reports_google_one_tap")
                             ) {
                                 Icon(Icons.Default.Person, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
@@ -893,9 +904,11 @@ private fun CloudSyncAndBackupView(viewModel: AppViewModel) {
                                 },
                                 shape = RoundedCornerShape(12.dp),
                                 border = BorderStroke(1.dp, MikroTikCyan.copy(alpha = 0.6f)),
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("btn_reports_email_fallback")
                             ) {
-                                Text("ربط فوري بالبريد: mosthassan.ye@gmail.com", color = MikroTikCyan, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                Text("دخول فوري بالبريد: mosthassan.ye@gmail.com (بيئة الاختبار / تجاوز Google)", color = MikroTikCyan, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
                             }
                         }
                     }

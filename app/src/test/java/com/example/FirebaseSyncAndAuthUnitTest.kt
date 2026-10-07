@@ -75,4 +75,46 @@ class FirebaseSyncAndAuthUnitTest {
         syncManager.setAutoSync(true)
         assertEquals(true, syncManager.autoSyncEnabled.value)
     }
+
+    @Test
+    fun testWebClientIdExtractionDynamically() {
+        val clientId = com.example.util.GoogleServicesConfigHelper.getWebClientId(context)
+        assertNotNull(clientId)
+        assertTrue("Web client ID should contain client id", clientId.contains(".apps.googleusercontent.com"))
+        assertTrue("Web client ID should not contain quotes", !clientId.contains("\"") && !clientId.contains("'"))
+        assertEquals(clientId.trim(), clientId)
+        assertEquals("668455931031-burt9863pi64rshdlmgenejnj27ep0d0.apps.googleusercontent.com", clientId)
+    }
+
+    @Test
+    fun testAuthManagerSessionHandling() {
+        val auth = com.example.data.auth.AuthManager(context)
+        val session = auth.signInDirectly("test.user@company.com", "Test User")
+        assertEquals("test.user@company.com", session.email)
+        assertEquals("Test User", session.displayName)
+        assertTrue(session.uid.isNotBlank())
+        assertEquals(session, auth.currentUser.value)
+    }
+
+    @Test
+    fun testRateZoneToggleAndConversion() {
+        val sanaaRate = com.example.core.model.ExchangeRate(
+            com.example.core.model.CurrencyCode.USD,
+            com.example.core.model.CurrencyCode.FUNCTIONAL,
+            535_000_000L
+        )
+        val adenRate = com.example.core.model.ExchangeRate(
+            com.example.core.model.CurrencyCode.USD,
+            com.example.core.model.CurrencyCode.FUNCTIONAL,
+            1_900_000_000L
+        )
+
+        val usdMinor = 100_00L // $100.00
+        val sanaaYer = sanaaRate.convert(usdMinor)
+        val adenYer = adenRate.convert(usdMinor)
+
+        assertEquals(53_500_00L, sanaaYer) // 53,500.00 YER
+        assertEquals(190_000_00L, adenYer) // 190,000.00 YER
+        assertTrue(adenYer > sanaaYer)
+    }
 }

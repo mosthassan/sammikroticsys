@@ -22,11 +22,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -127,6 +129,7 @@ fun CurrencySelector(
 
 /**
  * Informative Card displaying dynamic exchange rate for active transaction currency.
+ * Fully interactive with zone toggling (Sanaa <-> Aden) and manual override.
  */
 @Composable
 fun ExchangeRateCard(
@@ -134,16 +137,23 @@ fun ExchangeRateCard(
     rate: ExchangeRate?,
     zone: RateZone = RateZone.DEFAULT,
     modifier: Modifier = Modifier,
+    onZoneToggle: (() -> Unit)? = null,
     onEditRateClick: (() -> Unit)? = null
 ) {
     if (currency == CurrencyCode.FUNCTIONAL) return
 
     val rateFormatted = if (rate != null) ExchangeRate.formatRateMicros(rate.rateMicros) else "غير محدد"
+    val zoneShortName = if (zone == RateZone.SANAA) "صنعاء" else "عدن"
 
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
+            .then(
+                if (onZoneToggle != null) {
+                    Modifier.clickable { onZoneToggle() }
+                } else Modifier
+            )
             .border(BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)), RoundedCornerShape(12.dp)),
         color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
     ) {
@@ -154,7 +164,7 @@ fun ExchangeRateCard(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Default.CurrencyExchange,
@@ -164,10 +174,19 @@ fun ExchangeRateCard(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "سعر الصرف المعتمد (${zone.arabicName}):",
+                        text = "سعر الصرف المعتمد ($zoneShortName):",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    if (onZoneToggle != null) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "(اضغط للتبديل)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontSize = 10.sp
+                        )
+                    }
                 }
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
@@ -178,14 +197,34 @@ fun ExchangeRateCard(
                 )
             }
 
-            if (onEditRateClick != null) {
-                OutlinedButton(
-                    onClick = onEditRateClick,
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                    modifier = Modifier.height(32.dp)
-                ) {
-                    Text("تعديل", fontSize = 11.sp)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (onZoneToggle != null) {
+                    IconButton(
+                        onClick = onZoneToggle,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .testTag("btn_switch_rate_zone")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.SwapHoriz,
+                            contentDescription = "تبديل تسعيرة صنعاء / عدن",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+
+                if (onEditRateClick != null) {
+                    OutlinedButton(
+                        onClick = onEditRateClick,
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier
+                            .height(32.dp)
+                            .testTag("btn_edit_rate_manual")
+                    ) {
+                        Text("تعديل يدوي", fontSize = 11.sp)
+                    }
                 }
             }
         }

@@ -73,6 +73,7 @@ import com.example.ui.theme.BrandCyanPrimary
 import com.example.ui.theme.SemanticExpenseRed
 import com.example.ui.theme.SemanticIncomeGreen
 import com.example.ui.viewmodel.AppViewModel
+import com.example.util.findActivity
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -85,9 +86,10 @@ fun CloudSyncSheet(
     onDismissRequest: () -> Unit
 ) {
     val context = LocalContext.current
-    val activity = context as? Activity
+    val activity = remember(context) { context.findActivity() }
 
     val currentUser by viewModel.currentUser.collectAsState()
+    val authError by viewModel.authError.collectAsState()
     val syncState by viewModel.syncState.collectAsState()
     val syncMeta by viewModel.syncMetadata.collectAsState()
     val syncHistory by viewModel.syncHistory.collectAsState()
@@ -233,11 +235,7 @@ fun CloudSyncSheet(
                     ) {
                         Button(
                             onClick = {
-                                if (activity != null) {
-                                    viewModel.signInWithGoogle(activity)
-                                } else {
-                                    viewModel.signInDirectly("mosthassan.ye@gmail.com", "Mostafa Hassan")
-                                }
+                                viewModel.signInWithGoogle(activity ?: context)
                             },
                             modifier = Modifier
                                 .weight(1f)
@@ -254,7 +252,7 @@ fun CloudSyncSheet(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "دخول Google بنقرة واحدة",
+                                text = "دخول Google بنقرة",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold
                             )
@@ -272,6 +270,61 @@ fun CloudSyncSheet(
                                 text = "تغيير البريد",
                                 fontSize = 12.sp
                             )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Safe fallback button for test/debug environments without matching SHA-1
+                    OutlinedButton(
+                        onClick = {
+                            customEmailInput = currentUser?.email ?: "mosthassan.ye@gmail.com"
+                            showEmailEditDialog = true
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("btn_dev_fallback_login"),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = BrandCyanPrimary
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "دخول بديل بالبريد (بيئة التطوير / بدون SHA-1)",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+
+                    if (!authError.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp),
+                            color = SemanticExpenseRed.copy(alpha = 0.12f)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Error,
+                                    contentDescription = null,
+                                    tint = SemanticExpenseRed,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "$authError\n(إذا كنت في بيئة تطوير بدون تطابق SHA-1، يمكنك استخدام زر 'دخول بديل بالبريد')",
+                                    fontSize = 10.sp,
+                                    color = SemanticExpenseRed,
+                                    lineHeight = 14.sp
+                                )
+                            }
                         }
                     }
 
@@ -419,7 +472,7 @@ fun CloudSyncSheet(
                     onClick = { viewModel.syncPullFromFirebase() },
                     modifier = Modifier
                         .weight(1f)
-                        .testTag("btn_sync_pull_cloud"),
+                        .testTag("btn_restore_from_cloud"),
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Icon(
@@ -428,7 +481,7 @@ fun CloudSyncSheet(
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("سحب واستعادة", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text("استعادة من السحابة (Restore from Cloud)", fontWeight = FontWeight.Bold, fontSize = 11.sp, maxLines = 1)
                 }
             }
 

@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.example.data.local.AppDatabase
 import com.example.domain.usecase.BackupRestoreUseCase
+import com.google.firebase.FirebaseApp
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.Dispatchers
@@ -15,6 +16,22 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.util.UUID
 
+data class CloudBackupMeta(
+    val uid: String,
+    val userEmail: String,
+    val timestamp: Long,
+    val documentsCount: Int,
+    val journalLinesCount: Int,
+    val partiesCount: Int,
+    val totalRecords: Int,
+    val checksum: String
+)
+
+/**
+ * Genuine Cloud Backup & Restore Architecture.
+ * Scoped strictly under the authenticated user: users/{uid}/backup_latest.
+ * Guarantees 100% atomic restore within a single Room transaction.
+ */
 class FirestoreSyncManager(
     private val context: Context,
     private val db: AppDatabase,
@@ -30,6 +47,18 @@ class FirestoreSyncManager(
     val syncHistory: StateFlow<List<SyncLogItem>> = _syncHistory.asStateFlow()
 
     private val prefs = context.getSharedPreferences("sammikrotik_sync_prefs", Context.MODE_PRIVATE)
+
+    private val firestore: FirebaseFirestore?
+        get() = try {
+            if (FirebaseApp.getApps(context).isNotEmpty()) {
+                FirebaseFirestore.getInstance()
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.w("FirestoreSyncManager", "Firestore access: ${e.message}")
+            null
+        }
 
     init {
         loadLastSyncMetadata()
@@ -56,23 +85,75 @@ class FirestoreSyncManager(
             .replace("@", "_at_")
     }
 
-    private fun sanitizeEmail(email: String): String {
-        return email.trim().lowercase().replace("/", "_")
+    /**
+     * Checks if a remote backup exists for the specified user in Firestore.
+     */
+    suspend fun checkRemoteBackup(uid: String, userEmail: String): CloudBackupMeta? = withContext(Dispatchers.IO) {
+        val fs = firestore ?: return@withContext null
+        val safeUid = uid.ifBlank { sanitizeTenantEmail(userEmail) }
+        if (safeUid.isBlank()) return@withContext null
+
+        try {
+            // Check primary user scoped path: users/{uid}/backup_latest/latest
+            var doc = fs.collection("users").document(safeUid)
+                .collection("backup_latest").document("latest")
+                .get().await()
+
+            if (!doc.exists() && userEmail.isNotBlank()) {
+                // Secondary check under tenant scope
+                doc = fs.collection("tenants").document(sanitizeTenantEmail(userEmail))
+                    .collection("snapshots").document("latest")
+                    .get().await()
+            }
+
+            if (doc.exists()) {
+                val jsonContent = doc.getString("jsonContent")
+                if (!jsonContent.isNullOrBlank()) {
+                    val timestamp = doc.getLong("timestamp") ?: 0L
+                    val docs = doc.getLong("documentsCount")?.toInt() ?: 0
+                    val lines = doc.getLong("journalLinesCount")?.toInt() ?: 0
+                    val parties = doc.getLong("partiesCount")?.toInt() ?: 0
+                    val total = docs + lines + parties
+                    val checksum = doc.getString("checksum") ?: ""
+                    return@withContext CloudBackupMeta(
+                        uid = safeUid,
+                        userEmail = userEmail,
+                        timestamp = timestamp,
+                        documentsCount = docs,
+                        journalLinesCount = lines,
+                        partiesCount = parties,
+                        totalRecords = total,
+                        checksum = checksum
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("FirestoreSyncManager", "checkRemoteBackup error: ${e.message}")
+        }
+        null
     }
 
     /**
-     * Push all local accounting and network data to Firebase Firestore
-     * strictly isolated under the user's Google Email tenant scope.
+     * Cloud Push (رفع إلى السحابة):
+     * Exports complete Room database state (ledger, foreign currency, treasury accounts,
+     * parties, documents) into Firestore under users/{uid}/backup_latest.
      */
-    suspend fun syncPush(userEmail: String): Result<String> = withContext(Dispatchers.IO) {
-        if (userEmail.isBlank()) {
-            val err = "البريد الإلكتروني غير محدد، يرجى تسجيل الدخول أولاً"
+    suspend fun syncPush(uid: String, userEmail: String): Result<String> = withContext(Dispatchers.IO) {
+        val safeUid = uid.ifBlank { sanitizeTenantEmail(userEmail) }
+        if (safeUid.isBlank()) {
+            val err = "معرف المستخدم غير محدد، يرجى تسجيل الدخول أولاً"
             _syncState.value = SyncState.Error(err)
             return@withContext Result.failure(IllegalArgumentException(err))
         }
 
-        val safeEmail = sanitizeEmail(userEmail)
-        _syncState.value = SyncState.InProgress("جاري تحضير البيانات وضغط السجلات...", 0.1f)
+        val fs = firestore
+        if (fs == null) {
+            val err = "خدمة Firebase غير مهيأة على هذا الجهاز"
+            _syncState.value = SyncState.Error(err)
+            return@withContext Result.failure(IllegalStateException(err))
+        }
+
+        _syncState.value = SyncState.InProgress("جاري استخراج السجلات المحاسبية وتشفير البصمة...", 0.1f)
 
         try {
             // 1. Export verifiable snapshot
@@ -86,43 +167,26 @@ class FirestoreSyncManager(
             val entriesArr = root.optJSONArray("journal_entries")
             val linesArr = root.optJSONArray("journal_lines")
             val allocArr = root.optJSONArray("allocations")
+            val assetsArr = root.optJSONArray("assets")
+            val ratesArr = root.optJSONArray("currency_rates")
             val checksum = root.optString("sha256", "")
 
             val totalRecords = (partiesArr?.length() ?: 0) +
                     (pkgsArr?.length() ?: 0) +
                     (docsArr?.length() ?: 0) +
-                    (linesArr?.length() ?: 0)
+                    (linesArr?.length() ?: 0) +
+                    (treasuriesArr?.length() ?: 0)
 
-            _syncState.value = SyncState.InProgress("جاري الاتصال بقاعدة بيانات Firebase...", 0.3f)
+            _syncState.value = SyncState.InProgress("الاتصال بالسحابة: users/$safeUid/backup_latest...", 0.4f)
 
-            val firestore = FirebaseFirestore.getInstance()
-            val tenantRef = firestore.collection("tenants").document(safeEmail)
-
-            _syncState.value = SyncState.InProgress("جاري رفع القيود المحاسبية والسندات...", 0.6f)
-
-            // Save full snapshot document for atomic verification and restore
-            val snapshotData = hashMapOf(
+            val now = System.currentTimeMillis()
+            val backupData = hashMapOf(
                 "schemaVersion" to 1,
-                "userEmail" to safeEmail,
-                "timestamp" to System.currentTimeMillis(),
+                "uid" to safeUid,
+                "userEmail" to userEmail,
+                "timestamp" to now,
                 "checksum" to checksum,
                 "jsonContent" to jsonSnapshot,
-                "partiesCount" to (partiesArr?.length() ?: 0),
-                "packagesCount" to (pkgsArr?.length() ?: 0),
-                "documentsCount" to (docsArr?.length() ?: 0),
-                "journalLinesCount" to (linesArr?.length() ?: 0)
-            )
-
-            tenantRef.collection("snapshots")
-                .document("latest")
-                .set(snapshotData, SetOptions.merge())
-                .await()
-
-            // Update Metadata document
-            val now = System.currentTimeMillis()
-            val metaData = hashMapOf(
-                "userEmail" to safeEmail,
-                "lastSyncedAt" to now,
                 "partiesCount" to (partiesArr?.length() ?: 0),
                 "packagesCount" to (pkgsArr?.length() ?: 0),
                 "treasuriesCount" to (treasuriesArr?.length() ?: 0),
@@ -131,21 +195,44 @@ class FirestoreSyncManager(
                 "journalEntriesCount" to (entriesArr?.length() ?: 0),
                 "journalLinesCount" to (linesArr?.length() ?: 0),
                 "allocationsCount" to (allocArr?.length() ?: 0),
-                "checksum" to checksum,
-                "isBalanced" to true
+                "assetsCount" to (assetsArr?.length() ?: 0),
+                "currencyRatesCount" to (ratesArr?.length() ?: 0)
             )
 
-            tenantRef.collection("meta")
-                .document("sync_info")
-                .set(metaData, SetOptions.merge())
+            // Primary user scoped destination: users/{uid}/backup_latest/latest
+            fs.collection("users").document(safeUid)
+                .collection("backup_latest")
+                .document("latest")
+                .set(backupData, SetOptions.merge())
                 .await()
 
-            _syncState.value = SyncState.InProgress("اكتمال التحقق السحابي...", 0.95f)
+            // User document summary record
+            val userMeta = hashMapOf(
+                "lastBackupEpochMs" to now,
+                "userEmail" to userEmail,
+                "hasBackup" to true,
+                "documentsCount" to (docsArr?.length() ?: 0),
+                "journalLinesCount" to (linesArr?.length() ?: 0),
+                "checksum" to checksum
+            )
+            fs.collection("users").document(safeUid)
+                .set(userMeta, SetOptions.merge())
+                .await()
 
-            // Persist local sync metadata
+            // Legacy / multi-tenant mirror if email is present
+            if (userEmail.isNotBlank()) {
+                val tenantKey = sanitizeTenantEmail(userEmail)
+                fs.collection("tenants").document(tenantKey)
+                    .collection("snapshots").document("latest")
+                    .set(backupData, SetOptions.merge())
+                    .await()
+            }
+
+            _syncState.value = SyncState.InProgress("اكتمل حفظ النسخة السحابية...", 0.95f)
+
             prefs.edit()
                 .putLong("last_sync_timestamp", now)
-                .putString("last_sync_email", safeEmail)
+                .putString("last_sync_email", userEmail)
                 .putInt("last_sync_docs", docsArr?.length() ?: 0)
                 .putInt("last_sync_lines", linesArr?.length() ?: 0)
                 .putInt("last_sync_parties", partiesArr?.length() ?: 0)
@@ -153,7 +240,7 @@ class FirestoreSyncManager(
                 .apply()
 
             val metadata = SyncMetadata(
-                userEmail = safeEmail,
+                userEmail = userEmail,
                 lastSyncedAt = now,
                 totalDocuments = docsArr?.length() ?: 0,
                 totalJournalLines = linesArr?.length() ?: 0,
@@ -164,78 +251,76 @@ class FirestoreSyncManager(
             )
             _syncMetadata.value = metadata
 
-            val successMsg = "تم رفع $totalRecords سجلاً بنجاح إلى فيرباس لحساب $safeEmail"
+            val successMsg = "تم رفع النسخة السحابية بنجاح ($totalRecords سجلاً) تحت مسار users/$safeUid"
             _syncState.value = SyncState.Success(
                 message = successMsg,
                 lastSyncEpochMs = now,
                 totalRecords = totalRecords
             )
 
-            logSync(
-                action = "رفع إلى السحاب",
-                email = safeEmail,
-                records = totalRecords,
-                isSuccess = true,
-                summary = successMsg
-            )
-
+            logSync("رفع سحابي", userEmail, totalRecords, true, successMsg)
             Result.success(successMsg)
         } catch (e: Exception) {
             Log.e("FirestoreSyncManager", "SyncPush error: ${e.message}", e)
-            val err = "فشل المزامنة السحابية: ${e.localizedMessage ?: "تعذر الوصول إلى Firebase"}"
+            val err = "فشل الرفع السحابي: ${e.localizedMessage ?: "تعذر الوصول إلى Firebase"}"
             _syncState.value = SyncState.Error(err)
-
-            logSync(
-                action = "رفع إلى السحاب",
-                email = safeEmail,
-                records = 0,
-                isSuccess = false,
-                summary = err
-            )
-
+            logSync("رفع سحابي", userEmail, 0, false, err)
             Result.failure(e)
         }
     }
 
     /**
-     * Pull data from Firebase Firestore under the user's Google Email tenant scope
-     * and restore locally with 100% accounting invariants verification.
+     * Cloud Pull / Restore (استعادة البيانات من السحابة):
+     * Downloads Firestore backup from users/{uid}/backup_latest and atomically restores
+     * records into local Room within a single transaction.
      */
-    suspend fun syncPull(userEmail: String): Result<String> = withContext(Dispatchers.IO) {
-        if (userEmail.isBlank()) {
-            val err = "البريد الإلكتروني غير محدد، يرجى تسجيل الدخول أولاً"
+    suspend fun syncPull(uid: String, userEmail: String): Result<String> = withContext(Dispatchers.IO) {
+        val safeUid = uid.ifBlank { sanitizeTenantEmail(userEmail) }
+        if (safeUid.isBlank()) {
+            val err = "معرف المستخدم غير محدد، يرجى تسجيل الدخول أولاً"
             _syncState.value = SyncState.Error(err)
             return@withContext Result.failure(IllegalArgumentException(err))
         }
 
-        val safeEmail = sanitizeEmail(userEmail)
-        _syncState.value = SyncState.InProgress("جاري فحص السجلات السحابية للبريد...", 0.2f)
+        val fs = firestore
+        if (fs == null) {
+            val err = "خدمة Firebase غير مهيأة على هذا الجهاز"
+            _syncState.value = SyncState.Error(err)
+            return@withContext Result.failure(IllegalStateException(err))
+        }
+
+        _syncState.value = SyncState.InProgress("جاري فحص النسخ السحابية تحت users/$safeUid...", 0.2f)
 
         try {
-            val firestore = FirebaseFirestore.getInstance()
-            val snapshotDoc = firestore.collection("tenants")
-                .document(safeEmail)
-                .collection("snapshots")
+            // 1. Download document from users/{uid}/backup_latest/latest
+            var snapshotDoc = fs.collection("users").document(safeUid)
+                .collection("backup_latest")
                 .document("latest")
                 .get()
                 .await()
 
+            if (!snapshotDoc.exists() && userEmail.isNotBlank()) {
+                snapshotDoc = fs.collection("tenants").document(sanitizeTenantEmail(userEmail))
+                    .collection("snapshots").document("latest")
+                    .get().await()
+            }
+
             if (!snapshotDoc.exists()) {
-                val err = "لا توجد نسخة سحابية سابقة مخزنة لهذا البريد الإلكتروني"
+                val err = "لا توجد نسخة سحابية سابقة مخزنة لهذا الحساب"
                 _syncState.value = SyncState.Error(err)
                 return@withContext Result.failure(IllegalStateException(err))
             }
 
             val jsonContent = snapshotDoc.getString("jsonContent")
             if (jsonContent.isNullOrBlank()) {
-                val err = "النسخة السحابية فارغة أو تالفة"
+                val err = "النسخة السحابية فارغة أو غير متوافقة"
                 _syncState.value = SyncState.Error(err)
                 return@withContext Result.failure(IllegalStateException(err))
             }
 
-            _syncState.value = SyncState.InProgress("جاري مطابقة الثوابت المحاسبية وتطبيق البيانات...", 0.6f)
+            _syncState.value = SyncState.InProgress("جاري تطبيق الاستعادة الذرية ومطابقة القيود...", 0.6f)
 
-            // Restore with invariant validation
+            // 2. Restore atomically inside Room transaction
             val restoreResult = backupRestoreUseCase.restoreDatabaseFromJson(jsonContent)
             if (restoreResult.isFailure) {
                 val failureReason = restoreResult.exceptionOrNull()?.localizedMessage ?: "فشل التحقق من قيود المحاسبة"
@@ -252,7 +337,7 @@ class FirestoreSyncManager(
 
             prefs.edit()
                 .putLong("last_sync_timestamp", now)
-                .putString("last_sync_email", safeEmail)
+                .putString("last_sync_email", userEmail)
                 .putInt("last_sync_docs", docsCount)
                 .putInt("last_sync_lines", linesCount)
                 .putInt("last_sync_parties", partiesCount)
@@ -260,7 +345,7 @@ class FirestoreSyncManager(
                 .apply()
 
             _syncMetadata.value = SyncMetadata(
-                userEmail = safeEmail,
+                userEmail = userEmail,
                 lastSyncedAt = now,
                 totalDocuments = docsCount,
                 totalJournalLines = linesCount,
@@ -276,30 +361,31 @@ class FirestoreSyncManager(
                 totalRecords = totalRecords
             )
 
-            logSync(
-                action = "سحب واستعادة",
-                email = safeEmail,
-                records = totalRecords,
-                isSuccess = true,
-                summary = successMsg
-            )
-
+            logSync("استعادة من السحابة", userEmail, totalRecords, true, successMsg)
             Result.success(successMsg)
         } catch (e: Exception) {
             Log.e("FirestoreSyncManager", "SyncPull error: ${e.message}", e)
             val err = "فشل سحب البيانات من السحابة: ${e.localizedMessage ?: "تعذر الوصول إلى Firebase"}"
             _syncState.value = SyncState.Error(err)
-
-            logSync(
-                action = "سحب واستعادة",
-                email = safeEmail,
-                records = 0,
-                isSuccess = false,
-                summary = err
-            )
-
+            logSync("استعادة من السحابة", userEmail, 0, false, err)
             Result.failure(e)
         }
+    }
+
+    /**
+     * Backward-compatible convenience method for email-only callers.
+     */
+    suspend fun syncPush(userEmail: String): Result<String> {
+        val uid = sanitizeTenantEmail(userEmail)
+        return syncPush(uid, userEmail)
+    }
+
+    /**
+     * Backward-compatible convenience method for email-only callers.
+     */
+    suspend fun syncPull(userEmail: String): Result<String> {
+        val uid = sanitizeTenantEmail(userEmail)
+        return syncPull(uid, userEmail)
     }
 
     private fun logSync(

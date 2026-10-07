@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -118,13 +119,24 @@ sealed class MainTab(val title: String, val icon: ImageVector, val tag: String) 
 }
 
 class MainActivity : ComponentActivity() {
+    private val appViewModel: AppViewModel by viewModels()
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == com.example.data.auth.AuthManager.RC_GOOGLE_SIGN_IN) {
+            val task = com.google.android.gms.auth.api.signin.GoogleSignIn.getSignedInAccountFromIntent(data)
+            appViewModel.handleLegacyGoogleSignInResult(task)
+        }
+    }
+
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             SamMikrotikTheme {
-                val appViewModel: AppViewModel = viewModel()
+                val appViewModel: AppViewModel = this@MainActivity.appViewModel
                 val inspectorViewModel: InspectorViewModel = viewModel()
                 val snackbarHostState = remember { SnackbarHostState() }
 
@@ -289,6 +301,62 @@ class MainActivity : ComponentActivity() {
                         viewModel = appViewModel,
                         sheetState = syncSheetState,
                         onDismissRequest = { showCloudSyncSheet = false }
+                    )
+                }
+
+                // Prompt to restore if remote cloud backup exists on empty/fresh app
+                val pendingRestore by appViewModel.pendingCloudRestorePrompt.collectAsState()
+                if (pendingRestore != null) {
+                    val backup = pendingRestore!!
+                    val dateStr = if (backup.timestamp > 0L) {
+                        val sdf = java.text.SimpleDateFormat("yyyy/MM/dd HH:mm", java.util.Locale.getDefault())
+                        sdf.format(java.util.Date(backup.timestamp))
+                    } else "غير محدد"
+
+                    androidx.compose.material3.AlertDialog(
+                        onDismissRequest = { appViewModel.dismissCloudRestorePrompt() },
+                        title = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.CloudDone,
+                                    contentDescription = null,
+                                    tint = BrandCyanPrimary
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("استعادة النسخة الاحتياطية السحابية", fontWeight = FontWeight.Bold)
+                            }
+                        },
+                        text = {
+                            Column {
+                                Text(
+                                    text = "تم العثور على نسخة احتياطية سحابية سابقة لحسابك (${backup.userEmail}) بتاريخ $dateStr تحتوي على ${backup.documentsCount} مستنداً و ${backup.journalLinesCount} قيداً.",
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "هل ترغب في استعادة بياناتك السحابية بالكامل الآن ومطابقتها محلياً في عملية ذرية واحدة؟",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            androidx.compose.material3.Button(
+                                onClick = { appViewModel.restorePendingCloudBackup() },
+                                colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = BrandCyanPrimary),
+                                modifier = Modifier.testTag("btn_confirm_restore_cloud")
+                            ) {
+                                Text("استعادة من السحابة الآن")
+                            }
+                        },
+                        dismissButton = {
+                            androidx.compose.material3.TextButton(
+                                onClick = { appViewModel.dismissCloudRestorePrompt() },
+                                modifier = Modifier.testTag("btn_dismiss_restore_cloud")
+                            ) {
+                                Text("تخطي والبدء بحساب فارغ")
+                            }
+                        }
                     )
                 }
             }

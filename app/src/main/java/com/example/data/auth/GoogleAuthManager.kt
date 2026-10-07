@@ -1,13 +1,20 @@
 package com.example.data.auth
 
+import android.app.Activity
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
+import androidx.credentials.ClearCredentialStateRequest
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
+import androidx.credentials.exceptions.NoCredentialException
+import com.example.util.GoogleServicesConfigHelper
+import com.example.util.findActivity
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.auth.FirebaseAuth
@@ -16,6 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
 data class UserProfile(
@@ -23,13 +31,14 @@ data class UserProfile(
     val displayName: String,
     val photoUrl: String? = null,
     val idToken: String? = null,
+    val uid: String = "",
     val isAuthenticated: Boolean = true
 )
 
 /**
  * Google Auth & Tenant Identity Manager
  * Enables One-Tap Google Sign-In via Credential Manager & Firebase Auth.
- * The user's Google Email serves as the multi-tenant partition key for cloud sync.
+ * Triggers Google native account chooser bottom sheet with automatic legacy GoogleSignInClient fallback.
  */
 class GoogleAuthManager(private val context: Context) {
 
@@ -47,37 +56,46 @@ class GoogleAuthManager(private val context: Context) {
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
     init {
-        // Restore existing cached session or Firebase Auth user
         restoreCachedSession()
     }
 
     private fun restoreCachedSession() {
+        val fbUser = try { auth.currentUser } catch (e: Exception) { null }
+
+        if (fbUser != null && !fbUser.email.isNullOrBlank()) {
+            _userProfile.value = UserProfile(
+                email = fbUser.email!!,
+                displayName = fbUser.displayName ?: fbUser.email!!.substringBefore("@"),
+                photoUrl = fbUser.photoUrl?.toString(),
+                uid = fbUser.uid,
+                isAuthenticated = true
+            )
+            return
+        }
+
         val savedEmail = prefs.getString(KEY_USER_EMAIL, null)
         val savedName = prefs.getString(KEY_USER_NAME, null)
         val savedPhoto = prefs.getString(KEY_USER_PHOTO, null)
+        val savedUid = prefs.getString(KEY_USER_UID, null)
 
-        val fbUser = try { auth.currentUser } catch (e: Exception) { null }
-
-        if (fbUser != null && fbUser.email != null) {
-            _userProfile.value = UserProfile(
-                email = fbUser.email!!,
-                displayName = fbUser.displayName ?: savedName ?: fbUser.email!!.substringBefore("@"),
-                photoUrl = fbUser.photoUrl?.toString() ?: savedPhoto
-            )
-        } else if (!savedEmail.isNullOrBlank()) {
+        if (!savedEmail.isNullOrBlank()) {
             _userProfile.value = UserProfile(
                 email = savedEmail,
                 displayName = savedName ?: savedEmail.substringBefore("@"),
-                photoUrl = savedPhoto
+                photoUrl = savedPhoto,
+                uid = savedUid ?: savedEmail.replace(".", "_").replace("@", "_at_"),
+                isAuthenticated = true
             )
         } else {
-            // Default demo email for instant one-tap convenience if requested
             _userProfile.value = null
         }
     }
 
     /**
-     * One-Tap Google Sign-In with Credential Manager
+     * One-Tap Google Sign-In with Credential Manager.
+     * Displays native account chooser bottom sheet.
+     * If NoCredentialException or GetCredentialException occurs, automatically launches
+     * standard GoogleSignInClient fallback intent.
      */
     suspend fun signInWithGoogleOneTap(
         activityContext: Context,
@@ -86,21 +104,24 @@ class GoogleAuthManager(private val context: Context) {
         _isLoading.value = true
         _authError.value = null
 
-        try {
-            // Use Web Client ID if provided, otherwise fallback to standard prompt
-            val clientId = serverClientId?.takeIf { it.isNotBlank() } ?: DEFAULT_WEB_CLIENT_ID
+        val clientId = serverClientId?.takeIf { it.isNotBlank() }
+            ?: GoogleServicesConfigHelper.getWebClientId(context)
 
+        val activity = activityContext.findActivity()
+        val targetContext = activity ?: activityContext
+
+        try {
             val googleIdOption = GetGoogleIdOption.Builder()
-                .setFilterByAuthorizedAccounts(false)
+                .setFilterByAuthorizedAccounts(false) // Show ALL Google accounts on device
                 .setServerClientId(clientId)
-                .setAutoSelectEnabled(false)
+                .setAutoSelectEnabled(false) // Disables auto-select, shows native account chooser
                 .build()
 
             val request = GetCredentialRequest.Builder()
                 .addCredentialOption(googleIdOption)
                 .build()
 
-            val response = credentialManager.getCredential(activityContext, request)
+            val response = credentialManager.getCredential(targetContext, request)
             val credential = response.credential
 
             if (credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
@@ -110,52 +131,97 @@ class GoogleAuthManager(private val context: Context) {
                 val photo = googleIdTokenCredential.profilePictureUri?.toString()
                 val idToken = googleIdTokenCredential.idToken
 
-                // Sign in with Firebase Auth if ID Token is present
+                // Exchange Google idToken with Firebase Auth
+                var firebaseUid = ""
                 try {
                     val firebaseCred = GoogleAuthProvider.getCredential(idToken, null)
-                    auth.signInWithCredential(firebaseCred)
+                    val authResult = auth.signInWithCredential(firebaseCred).await()
+                    firebaseUid = authResult.user?.uid ?: ""
                 } catch (e: Exception) {
-                    Log.w("GoogleAuthManager", "Firebase Auth sign-in non-blocking fallback: ${e.message}")
+                    Log.w("GoogleAuthManager", "Firebase Auth sign-in: ${e.message}")
                 }
 
                 val profile = UserProfile(
                     email = email,
                     displayName = name,
                     photoUrl = photo,
-                    idToken = idToken
+                    idToken = idToken,
+                    uid = if (firebaseUid.isNotBlank()) firebaseUid else email.replace(".", "_").replace("@", "_at_"),
+                    isAuthenticated = true
                 )
 
                 persistSession(profile)
                 _userProfile.value = profile
                 _isLoading.value = false
-                return@withContext Result.success(profile)
+                Result.success(profile)
             } else {
-                throw IllegalStateException("نوع بيانات الاعتماد غير مدعوم")
+                val err = "نوع بيانات الاعتماد غير مدعوم"
+                _isLoading.value = false
+                _authError.value = err
+                Result.failure(IllegalStateException(err))
             }
         } catch (e: GetCredentialCancellationException) {
             _isLoading.value = false
             _authError.value = "تم إلغاء تسجيل الدخول"
-            return@withContext Result.failure(e)
+            Result.failure(e)
+        } catch (e: NoCredentialException) {
+            Log.w("GoogleAuthManager", "NoCredentialException: ${e.message}. Launching legacy GoogleSignIn fallback.")
+            return@withContext launchFallbackOrReport(activity, clientId, e)
+        } catch (e: GetCredentialException) {
+            Log.w("GoogleAuthManager", "GetCredentialException: ${e.message}. Launching legacy GoogleSignIn fallback.")
+            return@withContext launchFallbackOrReport(activity, clientId, e)
         } catch (e: Exception) {
             Log.e("GoogleAuthManager", "Google Sign-In Credential Manager error: ${e.message}", e)
             _isLoading.value = false
-            _authError.value = e.message ?: "فشل تسجيل الدخول عبر Google"
-            return@withContext Result.failure(e)
+            val err = e.localizedMessage ?: "فشل تسجيل الدخول عبر Google"
+            _authError.value = err
+            Result.failure(e)
         }
     }
 
+    private suspend fun launchFallbackOrReport(
+        activity: Activity?,
+        clientId: String,
+        originalException: Exception
+    ): Result<UserProfile> {
+        if (activity != null) {
+            try {
+                val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                    .requestIdToken(clientId)
+                    .requestEmail()
+                    .build()
+                val client = GoogleSignIn.getClient(activity, gso)
+                withContext(Dispatchers.Main) {
+                    activity.startActivityForResult(client.signInIntent, AuthManager.RC_GOOGLE_SIGN_IN)
+                }
+                _isLoading.value = false
+                val notice = "جاري فتح نافذة اختيار حساب Google البديلة..."
+                _authError.value = notice
+                return Result.failure(Exception(notice))
+            } catch (ex: Exception) {
+                Log.e("GoogleAuthManager", "Fallback launch failed: ${ex.message}", ex)
+            }
+        }
+        _isLoading.value = false
+        val msg = "لا تتوفر بيانات اعتماد Google متوافقة (تأكد من مطابقة SHA-1 في Firebase Console أو استخدم زر الدخول السريع بالبريد)"
+        _authError.value = msg
+        return Result.failure(Exception(msg))
+    }
+
     /**
-     * Direct One-Tap Quick Sign-In (with provided or confirmed Google email)
-     * Extremely convenient for instant onboarding and emulator environments.
+     * Direct sign-in with verified email (for tests / manual fallback).
      */
     fun signInDirectWithEmail(email: String, displayName: String? = null) {
         val cleanEmail = email.trim().lowercase()
         val name = displayName?.takeIf { it.isNotBlank() } ?: cleanEmail.substringBefore("@")
+        val uid = cleanEmail.replace(".", "_").replace("@", "_at_")
 
         val profile = UserProfile(
             email = cleanEmail,
             displayName = name,
-            photoUrl = null
+            photoUrl = null,
+            uid = uid,
+            isAuthenticated = true
         )
 
         persistSession(profile)
@@ -169,7 +235,7 @@ class GoogleAuthManager(private val context: Context) {
     suspend fun signOut() = withContext(Dispatchers.IO) {
         try {
             auth.signOut()
-            credentialManager.clearCredentialState(androidx.credentials.ClearCredentialStateRequest())
+            credentialManager.clearCredentialState(ClearCredentialStateRequest())
         } catch (e: Exception) {
             Log.w("GoogleAuthManager", "Error clearing credentials: ${e.message}")
         }
@@ -182,6 +248,7 @@ class GoogleAuthManager(private val context: Context) {
             .putString(KEY_USER_EMAIL, profile.email)
             .putString(KEY_USER_NAME, profile.displayName)
             .putString(KEY_USER_PHOTO, profile.photoUrl)
+            .putString(KEY_USER_UID, profile.uid)
             .apply()
     }
 
@@ -189,9 +256,6 @@ class GoogleAuthManager(private val context: Context) {
         private const val KEY_USER_EMAIL = "user_email"
         private const val KEY_USER_NAME = "user_name"
         private const val KEY_USER_PHOTO = "user_photo"
-
-        // Default OAuth Web Client ID for Google Auth
-        const val DEFAULT_WEB_CLIENT_ID = "180820475420-client-app.apps.googleusercontent.com"
-        const val DEFAULT_USER_EMAIL = "mosthassan.ye@gmail.com"
+        private const val KEY_USER_UID = "user_uid"
     }
 }

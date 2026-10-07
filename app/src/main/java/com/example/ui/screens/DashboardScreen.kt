@@ -73,6 +73,8 @@ import com.example.ui.components.StatCard
 import com.example.ui.theme.BrandCyanPrimary
 import com.example.ui.theme.SemanticExpenseRed
 import com.example.ui.theme.SemanticIncomeGreen
+import com.example.util.findActivity
+import androidx.compose.runtime.remember
 import com.example.ui.theme.SemanticWarningAmber
 import com.example.ui.viewmodel.AppViewModel
 import com.example.ui.viewmodel.PeriodFilter
@@ -93,7 +95,7 @@ fun DashboardScreen(
     val currentUser by viewModel.currentUser.collectAsState()
     val syncState by viewModel.syncState.collectAsState()
     val context = LocalContext.current
-    val activity = context as? Activity
+    val activity = remember(context) { context.findActivity() }
 
     LazyColumn(
         modifier = modifier
@@ -200,11 +202,7 @@ fun DashboardScreen(
 
                         OutlinedButton(
                             onClick = {
-                                if (activity != null) {
-                                    viewModel.signInWithGoogle(activity)
-                                } else {
-                                    viewModel.signInDirectly("mosthassan.ye@gmail.com")
-                                }
+                                viewModel.signInWithGoogle(activity ?: context)
                             },
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier
