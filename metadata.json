@@ -1,0 +1,6 @@
+{
+  "name": "SamMikrotik",
+  "description": "نظام إداري ومالي لمزودي خدمة الإنترنت وشبكات التوزيع اللاسلكية بنواة محاسبية مزدوجة القيد",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
