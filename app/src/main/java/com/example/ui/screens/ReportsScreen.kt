@@ -703,8 +703,12 @@ private fun PartnerDividendsView(
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    val percent = partnerSharePercent.toDoubleOrNull() ?: 50.0
-                    val partnerShareMinor = ((netProfit * percent) / 100.0).toLong()
+                    val cleanP = partnerSharePercent.trim().replace("،", "").replace("٬", "").replace(",", "").replace("٫", ".")
+                    val pParts = cleanP.split(".")
+                    val pWhole = pParts.getOrNull(0)?.toLongOrNull() ?: 50L
+                    val pFrac = pParts.getOrNull(1)?.padEnd(2, '0')?.take(2)?.toLongOrNull() ?: 0L
+                    val pBps = (pWhole * 100L + pFrac).coerceIn(0L, 10000L)
+                    val partnerShareMinor = (netProfit * pBps) / 10000L
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),

@@ -19,6 +19,7 @@ import com.example.data.local.entity.JournalEntryEntity
 import com.example.data.local.entity.JournalLineEntity
 import com.example.data.local.entity.PartyEntity
 import com.example.data.repository.AccountingRepository
+import com.example.domain.usecase.ExchangeRateResolver
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -123,7 +124,7 @@ class InspectorViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             val today = (System.currentTimeMillis() / 86400000L)
             val yerRate = ExchangeRate.parity(CurrencyCode.YER)
-            val usdRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.YER, 530_000_000L)
+            val usdRate = ExchangeRateResolver(db).resolve(CurrencyCode.USD, today)
 
             // 1. Create a grocery agent party
             val agentParty = PartyEntity(
@@ -165,7 +166,7 @@ class InspectorViewModel(application: Application) : AndroidViewModel(applicatio
                 notes = "دفعة نقدية تحت حساب الفاتورة"
             )
 
-            // 4. Post Upstream Starlink ISP direct expense: $250 USD @ 530 YER/USD
+            // 4. Post Upstream Starlink ISP direct expense: $250 USD
             repository.ledgerWriter.postPaymentVoucher(
                 recipientPartyId = AppDatabase.WALK_IN_CASH_PARTY_ID,
                 treasuryId = "TR_USD_VAULT",

@@ -318,11 +318,7 @@ object DataJsonHelper {
                 else -> CurrencyCode.YER
             }
 
-            val rateMicros = if (obj.has("exchangeRateMicros")) {
-                obj.optLong("exchangeRateMicros", if (currency == CurrencyCode.USD) 530_000_000L else if (currency == CurrencyCode.SAR) 140_000_000L else 1_000_000L)
-            } else {
-                if (currency == CurrencyCode.USD) 530_000_000L else if (currency == CurrencyCode.SAR) 140_000_000L else 1_000_000L
-            }
+            val rateMicros = obj.optLong("exchangeRateMicros", 0L)
 
             val invNum = when {
                 obj.has("invoiceNumber") -> obj.optString("invoiceNumber")

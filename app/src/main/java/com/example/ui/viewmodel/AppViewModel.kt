@@ -40,6 +40,10 @@ import com.example.data.repository.AccountingRepository
 import com.example.data.network.NetworkRepository
 import com.example.util.DataJsonHelper
 import com.example.core.model.UuidUtils
+import com.example.core.model.RateZone
+import com.example.core.model.SignificantRateChangeException
+import com.example.data.local.entity.OrganizationEntity
+import com.example.domain.usecase.ExchangeRateResolver
 import com.example.domain.usecase.AgingReport
 import com.example.domain.usecase.BackupRestoreUseCase
 import com.example.domain.usecase.BalanceSheetReport
@@ -91,6 +95,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val statementOfAccountUseCase = StatementOfAccountUseCase(db)
     val backupRestoreUseCase = BackupRestoreUseCase(db)
     val batchImportUseCase = BatchImportUseCase(db, writer)
+    val exchangeRateResolver = ExchangeRateResolver(db)
+
+    // Organization & Exchange Rates
+    val organization: StateFlow<OrganizationEntity?> = db.organizationDao().getOrganizationFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    val allRates: StateFlow<List<CurrencyRateEntity>> = db.currencyRateDao().getAllRatesFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // Auth & Firebase Sync
     val authManager = AuthManager(application)
@@ -131,9 +143,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val allPeriods: StateFlow<List<FiscalPeriodEntity>> = db.fiscalPeriodDao().getAllPeriodsFlow()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    val allRates: StateFlow<List<CurrencyRateEntity>> = db.currencyRateDao().getAllRatesFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val allStockMovements: StateFlow<List<StockMovementEntity>> = db.cardPackageDao().getAllStockMovementsFlow()
@@ -539,6 +548,39 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 onSuccess()
             } catch (e: Exception) {
                 _userMessage.emit("فشل تسجيل فاتورة المشتريات: ${e.message}")
+            }
+        }
+    }
+
+    fun addExchangeRate(
+        currency: CurrencyCode,
+        zone: RateZone,
+        rateMicros: Long,
+        effectiveDateEpochDay: Long,
+        createdBy: String = "USER",
+        reason: String = "",
+        confirmSignificantChange: Boolean = false,
+        onSuccess: () -> Unit = {},
+        onError: (Throwable) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            try {
+                exchangeRateResolver.addRate(
+                    currency = currency,
+                    zone = zone,
+                    rateMicros = rateMicros,
+                    effectiveDateEpochDay = effectiveDateEpochDay,
+                    createdBy = createdBy,
+                    reason = reason,
+                    confirmSignificantChange = confirmSignificantChange
+                )
+                _userMessage.emit("تم إضافة وتحديث سعر الصرف بنجاح")
+                onSuccess()
+            } catch (e: Throwable) {
+                onError(e)
+                if (e !is SignificantRateChangeException) {
+                    _userMessage.emit("خطأ في تحديث سعر الصرف: ${e.message}")
+                }
             }
         }
     }

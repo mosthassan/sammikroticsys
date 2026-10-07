@@ -85,8 +85,12 @@ import com.example.data.local.entity.DocumentEntity
 import com.example.data.local.entity.DocumentItemEntity
 import com.example.ui.components.AmountSemanticType
 import com.example.ui.components.AmountText
+import com.example.ui.components.CurrencySelector
+import com.example.ui.components.ExchangeRateCard
 import com.example.ui.components.SectionHeader
 import com.example.ui.components.StatusChip
+import com.example.domain.usecase.ExchangeRateResolver
+import androidx.compose.runtime.LaunchedEffect
 import com.example.ui.theme.SemanticExpenseRed
 import com.example.ui.theme.SemanticIncomeGreen
 import com.example.ui.viewmodel.AppViewModel
@@ -354,6 +358,7 @@ fun PurchasesAssetsScreen(
     if (showNewPurchaseSheet) {
         NewPurchaseBottomSheet(
             parties = parties,
+            resolver = viewModel.exchangeRateResolver,
             onDismiss = { showNewPurchaseSheet = false },
             onSubmit = { vendorId, currency, rate, items, notes ->
                 viewModel.postPurchaseInvoice(
@@ -669,12 +674,29 @@ fun PurchasesAssetsScreen(
 @Composable
 fun NewPurchaseBottomSheet(
     parties: List<com.example.data.local.entity.PartyEntity>,
+    resolver: ExchangeRateResolver? = null,
     onDismiss: () -> Unit,
     onSubmit: (vendorId: String, currency: CurrencyCode, rate: ExchangeRate, items: List<PurchaseItemSpec>, notes: String) -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val effectiveResolver = resolver ?: remember { ExchangeRateResolver(AppDatabase.getInstance(context)) }
     var selectedVendorId by rememberSaveable { mutableStateOf(parties.firstOrNull { it.isVendor }?.id ?: AppDatabase.WALK_IN_CASH_PARTY_ID) }
     var selectedCurrency by rememberSaveable { mutableStateOf(CurrencyCode.USD) }
-    var exchangeRateText by rememberSaveable { mutableStateOf("530") }
+    var resolvedRate by remember { mutableStateOf<ExchangeRate?>(null) }
+    val today = remember { java.time.LocalDate.now().toEpochDay() }
+
+    LaunchedEffect(selectedCurrency) {
+        if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
+            resolvedRate = ExchangeRate.parity(CurrencyCode.FUNCTIONAL)
+        } else {
+            try {
+                resolvedRate = effectiveResolver.resolve(selectedCurrency, today)
+            } catch (e: Exception) {
+                resolvedRate = null
+            }
+        }
+    }
+
     var itemDesc by rememberSaveable { mutableStateOf("") }
     var itemQtyText by rememberSaveable { mutableStateOf("1") }
     var itemPriceText by rememberSaveable { mutableStateOf("100") }
@@ -722,21 +744,17 @@ fun NewPurchaseBottomSheet(
                     }
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(modifier = Modifier.weight(1f)) {
-                        FilterChip(selected = selectedCurrency == CurrencyCode.USD, onClick = { selectedCurrency = CurrencyCode.USD }, label = { Text("USD ($)") })
-                        Spacer(modifier = Modifier.width(4.dp))
-                        FilterChip(selected = selectedCurrency == CurrencyCode.YER, onClick = { selectedCurrency = CurrencyCode.YER }, label = { Text("YER (ر.ي)") })
-                    }
-                    if (selectedCurrency != CurrencyCode.FUNCTIONAL) {
-                        OutlinedTextField(
-                            value = exchangeRateText,
-                            onValueChange = { exchangeRateText = it },
-                            label = { Text("سعر الصرف (YER/USD)") },
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
+                Text("العملة المعتمدة للفاتورة:")
+                CurrencySelector(
+                    selectedCurrency = selectedCurrency,
+                    onCurrencySelected = { selectedCurrency = it }
+                )
+
+                if (selectedCurrency != CurrencyCode.FUNCTIONAL) {
+                    ExchangeRateCard(
+                        currency = selectedCurrency,
+                        rate = resolvedRate
+                    )
                 }
 
                 SectionHeader(title = "إضافة بند مشتريات")
@@ -783,7 +801,7 @@ fun NewPurchaseBottomSheet(
                 Button(
                     onClick = {
                         val q = itemQtyText.toIntOrNull() ?: 1
-                        val p = (itemPriceText.toLongOrNull() ?: 0L) * 100L
+                        val p = Money.parseFromUserInput(itemPriceText, selectedCurrency)?.minor ?: 0L
                         val m = usefulMonthsText.toIntOrNull() ?: 24
                         val code = if (isFixedAsset) AccountConstants.FIXED_ASSETS_NETWORK else AccountConstants.OPERATING_EXPENSES
                         itemsList.add(PurchaseItemSpec(itemDesc.ifBlank { "معدات شبكة" }, code, q, p, isFixedAsset, m))
@@ -806,7 +824,7 @@ fun NewPurchaseBottomSheet(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("• ${itm.description}: ${itm.quantity} × ${itm.unitPriceMinor / 100L} ${selectedCurrency.name}")
+                            Text("• ${itm.description}: ${itm.quantity} × ${Money(itm.unitPriceMinor, selectedCurrency).format()}")
                             IconButton(onClick = { itemsList.removeAt(idx) }) {
                                 Icon(Icons.Default.Delete, contentDescription = "حذف")
                             }
@@ -834,12 +852,15 @@ fun NewPurchaseBottomSheet(
                 Button(
                     onClick = {
                         if (itemsList.isNotEmpty()) {
-                            val rateMicros = (exchangeRateText.toLongOrNull() ?: 530L) * 1_000_000L
-                            val rate = if (selectedCurrency == CurrencyCode.FUNCTIONAL) ExchangeRate.parity(CurrencyCode.FUNCTIONAL) else ExchangeRate(selectedCurrency, CurrencyCode.FUNCTIONAL, rateMicros)
+                            val rate = if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
+                                ExchangeRate.parity(CurrencyCode.FUNCTIONAL)
+                            } else {
+                                resolvedRate ?: error("Exchange rate not resolved for $selectedCurrency")
+                            }
                             onSubmit(selectedVendorId, selectedCurrency, rate, itemsList.toList(), notes)
                         }
                     },
-                    enabled = itemsList.isNotEmpty(),
+                    enabled = itemsList.isNotEmpty() && (selectedCurrency == CurrencyCode.FUNCTIONAL || resolvedRate != null),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.weight(1f).height(48.dp)
                 ) {

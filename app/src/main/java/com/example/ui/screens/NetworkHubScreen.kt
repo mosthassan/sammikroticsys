@@ -57,6 +57,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -97,12 +98,29 @@ import com.example.ui.theme.StatusWarning
 import com.example.ui.theme.TextMutedDark
 import com.example.ui.theme.TextPrimaryDark
 import com.example.ui.theme.TextSecondaryDark
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.filled.CurrencyExchange
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.mutableLongStateOf
+import com.example.core.model.CurrencyCode
+import com.example.core.model.ExchangeRate
+import com.example.core.model.RateZone
+import com.example.core.model.SignificantRateChangeException
+import com.example.data.local.entity.CurrencyRateEntity
+import com.example.ui.viewmodel.AppViewModel
 import com.example.util.NetworkSecurityHelper
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 @Composable
 fun NetworkHubScreen(
     networkRepository: NetworkRepository,
+    viewModel: AppViewModel? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -111,7 +129,7 @@ fun NetworkHubScreen(
     val devices by networkRepository.devices.collectAsState()
     val subnets by networkRepository.subnets.collectAsState()
 
-    var activeTab by remember { mutableStateOf(0) } // 0: Identity/Config, 1: Security, 2: Devices, 3: Subnets
+    var activeTab by remember { mutableStateOf(0) } // 0: Identity/Config, 1: Security, 2: Devices, 3: Subnets, 4: Rates Hub
     var showDeviceBackupDialog by remember { mutableStateOf(false) }
     var deviceToEdit by remember { mutableStateOf<NetworkDevice?>(null) }
     var isAddingDevice by remember { mutableStateOf(false) }
@@ -131,7 +149,9 @@ fun NetworkHubScreen(
 
         // Subtabs Navigation
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             HubTabItem(
@@ -139,28 +159,35 @@ fun NetworkHubScreen(
                 icon = Icons.Default.Settings,
                 isSelected = activeTab == 0,
                 onClick = { activeTab = 0 },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.width(105.dp)
             )
             HubTabItem(
                 label = "حماية الشبكة",
                 icon = Icons.Default.Security,
                 isSelected = activeTab == 1,
                 onClick = { activeTab = 1 },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.width(105.dp)
             )
             HubTabItem(
                 label = "أجهزة الشبكة",
                 icon = Icons.Default.Router,
                 isSelected = activeTab == 2,
                 onClick = { activeTab = 2 },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.width(105.dp)
             )
             HubTabItem(
                 label = "رنجات الشبكة",
                 icon = Icons.Default.Lan,
                 isSelected = activeTab == 3,
                 onClick = { activeTab = 3 },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.width(105.dp)
+            )
+            HubTabItem(
+                label = "أسعار الصرف",
+                icon = Icons.Default.CurrencyExchange,
+                isSelected = activeTab == 4,
+                onClick = { activeTab = 4 },
+                modifier = Modifier.width(105.dp)
             )
         }
 
@@ -195,6 +222,9 @@ fun NetworkHubScreen(
                     onDeleteSubnet = { subnetId ->
                         scope.launch { networkRepository.deleteSubnet(subnetId) }
                     }
+                )
+                4 -> RatesHubTab(
+                    viewModel = viewModel
                 )
             }
         }
@@ -1106,5 +1136,626 @@ private fun SubnetEditDialog(
             }
         },
         containerColor = CyberDarkSurface
+    )
+}
+
+@Composable
+private fun RatesHubTab(
+    viewModel: AppViewModel?,
+    modifier: Modifier = Modifier
+) {
+    val org by (viewModel?.organization ?: remember { MutableStateFlow(null) }).collectAsState()
+    val allRates by (viewModel?.allRates ?: remember { MutableStateFlow(emptyList()) }).collectAsState()
+    val todayEpoch = remember { java.time.LocalDate.now().toEpochDay() }
+
+    val primaryZone = org?.primaryRateZone ?: "SANAA"
+
+    // Group rates for USD and SAR by zone
+    val usdSanaa = remember(allRates) {
+        allRates.filter { it.currency == "USD" && it.zone == "SANAA" }
+            .maxByOrNull { it.effectiveDateEpochDay }
+    }
+    val usdAden = remember(allRates) {
+        allRates.filter { it.currency == "USD" && it.zone == "ADEN" }
+            .maxByOrNull { it.effectiveDateEpochDay }
+    }
+    val sarSanaa = remember(allRates) {
+        allRates.filter { it.currency == "SAR" && it.zone == "SANAA" }
+            .maxByOrNull { it.effectiveDateEpochDay }
+    }
+    val sarAden = remember(allRates) {
+        allRates.filter { it.currency == "SAR" && it.zone == "ADEN" }
+            .maxByOrNull { it.effectiveDateEpochDay }
+    }
+
+    // Alerts
+    val isAnyRateOlderThan7Days = remember(usdSanaa, usdAden, sarSanaa, sarAden) {
+        listOfNotNull(usdSanaa, usdAden, sarSanaa, sarAden).any {
+            (todayEpoch - it.effectiveDateEpochDay) > 7
+        }
+    }
+
+    val isUsdDivergenceHigh = remember(usdSanaa, usdAden) {
+        if (usdSanaa != null && usdAden != null && usdSanaa.rateMicros > 0L && usdAden.rateMicros > 0L) {
+            val diff = kotlin.math.abs(usdSanaa.rateMicros - usdAden.rateMicros)
+            val minRate = minOf(usdSanaa.rateMicros, usdAden.rateMicros)
+            diff * 2L > minRate // > 50%
+        } else false
+    }
+
+    var showUpdateDialog by remember { mutableStateOf(false) }
+    var selectedCurrencyForUpdate by remember { mutableStateOf(CurrencyCode.USD) }
+    var selectedZoneForUpdate by remember { mutableStateOf(RateZone.SANAA) }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        // Permanent Disclaimer Banner
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            color = MikroTikNavy.copy(alpha = 0.5f),
+            border = BorderStroke(1.dp, MikroTikCyan.copy(alpha = 0.4f))
+        ) {
+            Row(
+                modifier = Modifier.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.Info,
+                    contentDescription = null,
+                    tint = MikroTikCyan,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = "تنبيه: تحديثات أسعار الصرف تسري على السندات والفواتير الجديدة فقط، وتبقى القيود والمعاملات التاريخية السابقة بسعرها التاريخي دون تغيير.",
+                    color = TextPrimaryDark,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp
+                )
+            }
+        }
+
+        // Warning banner if active rate is older than 7 days
+        if (isAnyRateOlderThan7Days) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                color = StatusWarning.copy(alpha = 0.15f),
+                border = BorderStroke(1.dp, StatusWarning.copy(alpha = 0.5f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = StatusWarning,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "تحذير: توجد أسعار صرف نشطة لم يتم تحديثها منذ أكثر من 7 أيام. يُنصح بمراجعة وتحديث أسعار الصرف وفق السوق اليومي.",
+                        color = StatusWarning,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        lineHeight = 18.sp
+                    )
+                }
+            }
+        }
+
+        // Warning banner if USD rates between Sana'a and Aden diverge by > 50%
+        if (isUsdDivergenceHigh) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                color = SemanticExpenseRed.copy(alpha = 0.15f),
+                border = BorderStroke(1.dp, SemanticExpenseRed.copy(alpha = 0.5f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = SemanticExpenseRed,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "تحذير: يوجد فارق تجاوز 50% بين سعر صرف الدولار الأمريكي في صنعاء وعدن. يُرجى التحقق من صحة الأسعار المدخلة.",
+                        color = SemanticExpenseRed,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        lineHeight = 18.sp
+                    )
+                }
+            }
+        }
+
+        // Header and New Rate Action Button
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "مركز أسعار الصرف والعملات",
+                color = TextPrimaryDark,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp
+            )
+            Button(
+                onClick = {
+                    selectedCurrencyForUpdate = CurrencyCode.USD
+                    selectedZoneForUpdate = RateZone.valueOf(primaryZone)
+                    showUpdateDialog = true
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = MikroTikPrimary),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("تحديث سعر الصرف", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        // USD Dual Rates Section
+        CurrencyDualRatesSection(
+            currency = CurrencyCode.USD,
+            currencyLabel = "الدولار الأمريكي (USD)",
+            sanaaRate = usdSanaa,
+            adenRate = usdAden,
+            primaryZone = primaryZone,
+            onUpdateRate = { zone ->
+                selectedCurrencyForUpdate = CurrencyCode.USD
+                selectedZoneForUpdate = zone
+                showUpdateDialog = true
+            }
+        )
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        // SAR Dual Rates Section
+        CurrencyDualRatesSection(
+            currency = CurrencyCode.SAR,
+            currencyLabel = "الريال السعودي (SAR)",
+            sanaaRate = sarSanaa,
+            adenRate = sarAden,
+            primaryZone = primaryZone,
+            onUpdateRate = { zone ->
+                selectedCurrencyForUpdate = CurrencyCode.SAR
+                selectedZoneForUpdate = zone
+                showUpdateDialog = true
+            }
+        )
+    }
+
+    if (showUpdateDialog && viewModel != null) {
+        UpdateRateDialog(
+            viewModel = viewModel,
+            initialCurrency = selectedCurrencyForUpdate,
+            initialZone = selectedZoneForUpdate,
+            onDismiss = { showUpdateDialog = false }
+        )
+    }
+}
+
+@Composable
+private fun CurrencyDualRatesSection(
+    currency: CurrencyCode,
+    currencyLabel: String,
+    sanaaRate: CurrencyRateEntity?,
+    adenRate: CurrencyRateEntity?,
+    primaryZone: String,
+    onUpdateRate: (RateZone) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = CyberDarkCardElevated),
+        border = BorderStroke(1.dp, CyberBorder)
+    ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = currencyLabel,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    color = MikroTikCyan
+                )
+                Text(
+                    text = "العملة المقابلة: ريال يمني (YER)",
+                    fontSize = 11.sp,
+                    color = TextSecondaryDark
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                RateZoneCard(
+                    zone = RateZone.SANAA,
+                    currency = currency,
+                    rateEntity = sanaaRate,
+                    isPrimary = primaryZone == "SANAA",
+                    onUpdate = { onUpdateRate(RateZone.SANAA) },
+                    modifier = Modifier.weight(1f)
+                )
+
+                RateZoneCard(
+                    zone = RateZone.ADEN,
+                    currency = currency,
+                    rateEntity = adenRate,
+                    isPrimary = primaryZone == "ADEN",
+                    onUpdate = { onUpdateRate(RateZone.ADEN) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RateZoneCard(
+    zone: RateZone,
+    currency: CurrencyCode,
+    rateEntity: CurrencyRateEntity?,
+    isPrimary: Boolean,
+    onUpdate: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        color = CyberDarkSurface,
+        border = BorderStroke(
+            1.dp,
+            if (isPrimary) MikroTikCyan.copy(alpha = 0.6f) else CyberBorder
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = zone.arabicName,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    color = TextPrimaryDark
+                )
+                if (isPrimary) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = MikroTikPrimary.copy(alpha = 0.25f),
+                        border = BorderStroke(1.dp, MikroTikCyan.copy(alpha = 0.5f))
+                    ) {
+                        Text(
+                            text = "المنطقة الرئيسية",
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MikroTikCyan,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+
+            val rateText = if (rateEntity != null && rateEntity.rateMicros > 0L) {
+                ExchangeRate.formatRateMicros(rateEntity.rateMicros)
+            } else "غير محدد"
+
+            Text(
+                text = "1 ${currency.name} = $rateText YER",
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp,
+                color = if (rateEntity != null) MikroTikCyan else StatusWarning
+            )
+
+            if (rateEntity != null) {
+                val effectiveDateStr = try {
+                    java.time.LocalDate.ofEpochDay(rateEntity.effectiveDateEpochDay).toString()
+                } catch (e: Exception) {
+                    rateEntity.effectiveDateEpochDay.toString()
+                }
+                val createdTimeStr = try {
+                    val dt = java.time.Instant.ofEpochMilli(rateEntity.createdAt)
+                        .atZone(java.time.ZoneId.systemDefault())
+                        .toLocalDateTime()
+                    dt.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+                } catch (e: Exception) {
+                    ""
+                }
+
+                Text(
+                    text = "تاريخ السريان: $effectiveDateStr",
+                    fontSize = 10.sp,
+                    color = TextSecondaryDark
+                )
+                Text(
+                    text = "المسؤول: ${rateEntity.createdBy}",
+                    fontSize = 10.sp,
+                    color = TextMutedDark
+                )
+                if (createdTimeStr.isNotBlank()) {
+                    Text(
+                        text = "التسجيل: $createdTimeStr",
+                        fontSize = 10.sp,
+                        color = TextMutedDark
+                    )
+                }
+                if (rateEntity.reason.isNotBlank()) {
+                    Text(
+                        text = "السبب: ${rateEntity.reason}",
+                        fontSize = 10.sp,
+                        color = TextMutedDark,
+                        maxLines = 1
+                    )
+                }
+            } else {
+                Text(
+                    text = "لا يوجد سعر مسجل لهذه المنطقة",
+                    fontSize = 10.sp,
+                    color = TextMutedDark
+                )
+            }
+
+            Spacer(modifier = Modifier.height(2.dp))
+
+            OutlinedButton(
+                onClick = onUpdate,
+                modifier = Modifier.fillMaxWidth().height(32.dp),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+            ) {
+                Text("تحديث السعر", fontSize = 11.sp, color = TextPrimaryDark)
+            }
+        }
+    }
+}
+
+@Composable
+private fun UpdateRateDialog(
+    viewModel: AppViewModel,
+    initialCurrency: CurrencyCode,
+    initialZone: RateZone,
+    onDismiss: () -> Unit
+) {
+    val todayEpoch = remember { java.time.LocalDate.now().toEpochDay() }
+    var currency by remember { mutableStateOf(initialCurrency) }
+    var zone by remember { mutableStateOf(initialZone) }
+    var rateInputText by remember { mutableStateOf("") }
+    var reasonText by remember { mutableStateOf("") }
+    var effectiveDateEpochDay by remember { mutableLongStateOf(todayEpoch) }
+
+    var significantChangeEx by remember { mutableStateOf<SignificantRateChangeException?>(null) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    val parsedRateMicros = remember(rateInputText) {
+        ExchangeRate.parseRateFromUserInput(rateInputText)
+    }
+
+    if (significantChangeEx != null) {
+        val ex = significantChangeEx!!
+        AlertDialog(
+            onDismissRequest = { significantChangeEx = null },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Warning, contentDescription = null, tint = StatusWarning)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("تأكيد فارق السعر الكبير (> 10%)", color = StatusWarning, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val percentStr = String.format(java.util.Locale.US, "%.1f", ex.percentChange)
+                    Text(
+                        text = "السعر الجديد يختلف بنسبة $percentStr% عن السعر السابق المسجل.",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp
+                    )
+                    Text(
+                        text = "السعر السابق: 1 ${currency.name} = ${ExchangeRate.formatRateMicros(ex.oldRateMicros)} YER\nالسعر المقترح: 1 ${currency.name} = ${ExchangeRate.formatRateMicros(ex.newRateMicros)} YER",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "هل ترغب في تأكيد واعتماد هذا السعر بشكل استثنائي؟",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val micros = parsedRateMicros ?: return@Button
+                        viewModel.addExchangeRate(
+                            currency = currency,
+                            zone = zone,
+                            rateMicros = micros,
+                            effectiveDateEpochDay = effectiveDateEpochDay,
+                            createdBy = "USER",
+                            reason = reasonText.ifBlank { "تحديث سعر الصرف بتأكيد فارق" },
+                            confirmSignificantChange = true,
+                            onSuccess = {
+                                significantChangeEx = null
+                                onDismiss()
+                            },
+                            onError = { err ->
+                                errorMessage = err.message
+                            }
+                        )
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = StatusWarning)
+                ) {
+                    Text("نعم، تأكيد وحفظ السعر", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { significantChangeEx = null }) {
+                    Text("تراجع وتعديل السعر")
+                }
+            }
+        )
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.CurrencyExchange, contentDescription = null, tint = MikroTikCyan)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("تحديث سعر الصرف الرسمي", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text("العملة الأجنبية:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(CurrencyCode.USD, CurrencyCode.SAR).forEach { c ->
+                        FilterChip(
+                            selected = currency == c,
+                            onClick = { currency = c },
+                            label = { Text(c.name) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MikroTikPrimary,
+                                selectedLabelColor = Color.White
+                            )
+                        )
+                    }
+                }
+
+                Text("النطاق الجغرافي / المنطقة:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(RateZone.SANAA, RateZone.ADEN).forEach { z ->
+                        FilterChip(
+                            selected = zone == z,
+                            onClick = { zone = z },
+                            label = { Text(z.arabicName) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MikroTikPrimary,
+                                selectedLabelColor = Color.White
+                            )
+                        )
+                    }
+                }
+
+                OutlinedTextField(
+                    value = rateInputText,
+                    onValueChange = {
+                        rateInputText = it
+                        errorMessage = null
+                    },
+                    label = { Text("سعر الصرف مقابل الريال اليمني (YER)") },
+                    placeholder = { Text("مثال: 535 أو 535.50") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // Live Preview
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    color = CyberDarkCardElevated,
+                    border = BorderStroke(1.dp, if (parsedRateMicros != null) MikroTikCyan.copy(alpha = 0.5f) else CyberBorder)
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text("المعاينة الفورية:", fontSize = 11.sp, color = TextSecondaryDark)
+                        if (parsedRateMicros != null) {
+                            Text(
+                                "1 ${currency.name} = ${ExchangeRate.formatRateMicros(parsedRateMicros)} YER",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = MikroTikCyan
+                            )
+                        } else {
+                            Text(
+                                if (rateInputText.isBlank()) "أدخل السعر لمعاينة الناتج" else "تنسيق السعر غير صالح (أرقام فقط، بحد أقصى 6 خانات عشرية)",
+                                fontSize = 11.sp,
+                                color = if (rateInputText.isBlank()) TextMutedDark else SemanticExpenseRed
+                            )
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = reasonText,
+                    onValueChange = { reasonText = it },
+                    label = { Text("سبب التحديث / المرجع (اختياري)") },
+                    placeholder = { Text("مثال: إغلاق السوق اليومي") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                if (errorMessage != null) {
+                    Text(
+                        text = errorMessage!!,
+                        color = SemanticExpenseRed,
+                        fontSize = 11.sp
+                    )
+                }
+
+                Text(
+                    text = "ملاحظة: السعر المسجل سيُطبق على المستندات الجديدة حصراً ولا يؤثر على العمليات المؤرشفة.",
+                    fontSize = 10.sp,
+                    color = TextMutedDark
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val micros = parsedRateMicros ?: return@Button
+                    viewModel.addExchangeRate(
+                        currency = currency,
+                        zone = zone,
+                        rateMicros = micros,
+                        effectiveDateEpochDay = effectiveDateEpochDay,
+                        createdBy = "USER",
+                        reason = reasonText.ifBlank { "تحديث سعر الصرف اليومي" },
+                        confirmSignificantChange = false,
+                        onSuccess = {
+                            onDismiss()
+                        },
+                        onError = { err ->
+                            if (err is SignificantRateChangeException) {
+                                significantChangeEx = err
+                            } else {
+                                errorMessage = err.message
+                            }
+                        }
+                    )
+                },
+                enabled = parsedRateMicros != null && parsedRateMicros > 0L,
+                colors = ButtonDefaults.buttonColors(containerColor = MikroTikPrimary)
+            ) {
+                Text("حفظ السعر واعتماده")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("إلغاء")
+            }
+        }
     )
 }

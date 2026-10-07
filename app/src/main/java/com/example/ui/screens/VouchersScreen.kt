@@ -93,6 +93,9 @@ import com.example.data.local.AppDatabase
 import com.example.data.local.entity.DocumentEntity
 import com.example.data.local.entity.PartyEntity
 import com.example.data.local.entity.TreasuryAccountEntity
+import com.example.domain.usecase.ExchangeRateResolver
+import com.example.ui.components.ExchangeRateCard
+import androidx.compose.runtime.LaunchedEffect
 import com.example.ui.components.AmountSemanticType
 import com.example.ui.components.AmountText
 import com.example.ui.components.StatusChip
@@ -498,6 +501,7 @@ fun VouchersScreen(
             initialTab = voucherCreationInitialTab,
             parties = parties,
             treasuries = treasuries,
+            resolver = viewModel.exchangeRateResolver,
             onDismiss = { showVoucherCreationSheet = false },
             onSubmitReceipt = { partyId, treasuryId, amountMinor, currency, rate, notes ->
                 viewModel.postCustomerReceipt(
@@ -696,6 +700,7 @@ fun VoucherCreationBottomSheet(
     initialTab: Int,
     parties: List<PartyEntity>,
     treasuries: List<TreasuryAccountEntity>,
+    resolver: ExchangeRateResolver? = null,
     onDismiss: () -> Unit,
     onSubmitReceipt: (partyId: String, treasuryId: String, amountMinor: Long, currency: CurrencyCode, rate: ExchangeRate, notes: String) -> Unit,
     onSubmitPayment: (recipientId: String, treasuryId: String, amountMinor: Long, currency: CurrencyCode, rate: ExchangeRate, paymentType: PaymentVoucherType, customExp: String?, notes: String) -> Unit
@@ -703,6 +708,10 @@ fun VoucherCreationBottomSheet(
     var voucherMode by remember { mutableIntStateOf(initialTab) } // 0: Receipt, 1: Payment
     val isReceipt = voucherMode == 0
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val effectiveResolver = resolver ?: remember { ExchangeRateResolver(AppDatabase.getInstance(context)) }
+    val today = remember { java.time.LocalDate.now().toEpochDay() }
 
     // Form States
     val customers = remember(parties) {
@@ -725,6 +734,19 @@ fun VoucherCreationBottomSheet(
 
     val activeTreasury = treasuries.firstOrNull { it.id == selectedTreasuryId }
     val currency = CurrencyCode.fromString(activeTreasury?.currency ?: "YER")
+
+    var resolvedRate by remember { mutableStateOf<ExchangeRate?>(null) }
+    LaunchedEffect(currency) {
+        if (currency == CurrencyCode.FUNCTIONAL) {
+            resolvedRate = ExchangeRate.parity(CurrencyCode.FUNCTIONAL)
+        } else {
+            try {
+                resolvedRate = effectiveResolver.resolve(currency, today)
+            } catch (e: Exception) {
+                resolvedRate = null
+            }
+        }
+    }
 
     val relevantRecipients = remember(parties, paymentType) {
         when (paymentType) {
@@ -1101,6 +1123,13 @@ fun VoucherCreationBottomSheet(
                     }
                 }
 
+                if (currency != CurrencyCode.FUNCTIONAL) {
+                    ExchangeRateCard(
+                        currency = currency,
+                        rate = resolvedRate
+                    )
+                }
+
                 // Amount Input + Quick Chips (Smooth LazyRow, NO STRETCHING, NO GAPS)
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
@@ -1189,13 +1218,18 @@ fun VoucherCreationBottomSheet(
                 Button(
                     onClick = {
                         if (amountMinor > 0L) {
+                            val rate = if (currency == CurrencyCode.FUNCTIONAL) {
+                                ExchangeRate.parity(CurrencyCode.FUNCTIONAL)
+                            } else {
+                                resolvedRate ?: error("Exchange rate not resolved for $currency")
+                            }
                             if (isReceipt) {
                                 onSubmitReceipt(
                                     selectedPartyId,
                                     selectedTreasuryId,
                                     amountMinor,
                                     currency,
-                                    ExchangeRate.parity(currency),
+                                    rate,
                                     notes
                                 )
                             } else {
@@ -1204,7 +1238,7 @@ fun VoucherCreationBottomSheet(
                                     selectedTreasuryId,
                                     amountMinor,
                                     currency,
-                                    ExchangeRate.parity(currency),
+                                    rate,
                                     paymentType,
                                     null,
                                     notes
@@ -1212,7 +1246,7 @@ fun VoucherCreationBottomSheet(
                             }
                         }
                     },
-                    enabled = amountMinor > 0L,
+                    enabled = amountMinor > 0L && (currency == CurrencyCode.FUNCTIONAL || resolvedRate != null),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = themeColor,
                         disabledContainerColor = CyberDarkCardElevated

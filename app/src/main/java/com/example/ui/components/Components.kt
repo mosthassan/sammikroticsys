@@ -46,7 +46,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.core.model.CurrencyCode
+import com.example.core.model.ExchangeRate
 import com.example.core.model.Money
+import com.example.core.model.RateZone
+import androidx.compose.material.icons.filled.CurrencyExchange
+import androidx.compose.material3.OutlinedButton
 import com.example.ui.theme.SemanticExpenseRed
 import com.example.ui.theme.SemanticIncomeGreen
 import com.example.ui.theme.SemanticWarningAmber
@@ -56,6 +60,136 @@ enum class AmountSemanticType {
     EXPENSE,
     NEUTRAL,
     AUTO
+}
+
+/**
+ * Shared Multi-Currency Selector supporting YER, USD, and SAR.
+ */
+@Composable
+fun CurrencySelector(
+    selectedCurrency: CurrencyCode,
+    onCurrencySelected: (CurrencyCode) -> Unit,
+    modifier: Modifier = Modifier,
+    enabledCurrencies: List<CurrencyCode> = listOf(CurrencyCode.YER, CurrencyCode.USD, CurrencyCode.SAR)
+) {
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), RoundedCornerShape(12.dp)),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            enabledCurrencies.forEach { curr ->
+                val isSelected = selectedCurrency == curr
+                Surface(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { onCurrencySelected(curr) }
+                        .then(
+                            if (isSelected) Modifier.border(
+                                BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                                RoundedCornerShape(10.dp)
+                            ) else Modifier
+                        ),
+                    color = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f) else Color.Transparent
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            text = "${curr.name} (${curr.symbol})",
+                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                            fontSize = 12.sp
+                        )
+                        Text(
+                            text = curr.arabicName,
+                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Informative Card displaying dynamic exchange rate for active transaction currency.
+ */
+@Composable
+fun ExchangeRateCard(
+    currency: CurrencyCode,
+    rate: ExchangeRate?,
+    zone: RateZone = RateZone.DEFAULT,
+    modifier: Modifier = Modifier,
+    onEditRateClick: (() -> Unit)? = null
+) {
+    if (currency == CurrencyCode.FUNCTIONAL) return
+
+    val rateFormatted = if (rate != null) ExchangeRate.formatRateMicros(rate.rateMicros) else "غير محدد"
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .border(BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)), RoundedCornerShape(12.dp)),
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.CurrencyExchange,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "سعر الصرف المعتمد (${zone.arabicName}):",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "1 ${currency.name} = $rateFormatted YER",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            if (onEditRateClick != null) {
+                OutlinedButton(
+                    onClick = onEditRateClick,
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Text("تعديل", fontSize = 11.sp)
+                }
+            }
+        }
+    }
 }
 
 @Composable

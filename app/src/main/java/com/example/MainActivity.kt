@@ -274,7 +274,11 @@ class MainActivity : ComponentActivity() {
                         2 -> VouchersScreen(viewModel = appViewModel, modifier = modifier)
                         3 -> PurchasesAssetsScreen(viewModel = appViewModel, modifier = modifier)
                         4 -> PartiesAndStockCombinedScreen(viewModel = appViewModel, modifier = modifier)
-                        5 -> NetworkHubScreen(networkRepository = appViewModel.networkRepository, modifier = modifier)
+                        5 -> NetworkHubScreen(
+                            networkRepository = appViewModel.networkRepository,
+                            viewModel = appViewModel,
+                            modifier = modifier
+                        )
                         6 -> ReportsScreen(viewModel = appViewModel, modifier = modifier)
                         7 -> AuditScreen(inspectorViewModel = inspectorViewModel, modifier = modifier)
                     }

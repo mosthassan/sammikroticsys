@@ -763,7 +763,11 @@ fun AddPartyDialog(
                         onClick = {
                             if (isValid) {
                                 val limit = (creditLimitText.toLongOrNull() ?: 0L) * 100L
-                                val equityBps = ((equityShareText.toDoubleOrNull() ?: 0.0) * 100.0).toInt()
+                                val cleanEq = equityShareText.trim().replace("،", "").replace("٬", "").replace(",", "").replace("٫", ".")
+                                val eqParts = cleanEq.split(".")
+                                val eqWhole = eqParts.getOrNull(0)?.toIntOrNull() ?: 0
+                                val eqFrac = eqParts.getOrNull(1)?.padEnd(2, '0')?.take(2)?.toIntOrNull() ?: 0
+                                val equityBps = (eqWhole * 100 + eqFrac).coerceIn(0, 10000)
                                 onSubmit(name.trim(), phone.trim(), isCustomer, isVendor, isPartner, limit, equityBps)
                             }
                         },

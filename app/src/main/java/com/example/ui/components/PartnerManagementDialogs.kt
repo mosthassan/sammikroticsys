@@ -50,6 +50,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -60,6 +61,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -68,9 +70,11 @@ import androidx.compose.ui.window.DialogProperties
 import com.example.core.model.CurrencyCode
 import com.example.core.model.ExchangeRate
 import com.example.core.model.Money
+import com.example.data.local.AppDatabase
 import com.example.data.local.entity.DocumentEntity
 import com.example.data.local.entity.PartyEntity
 import com.example.data.local.entity.TreasuryAccountEntity
+import com.example.domain.usecase.ExchangeRateResolver
 import com.example.ui.theme.CyberBorder
 import com.example.ui.theme.CyberDarkCardElevated
 import com.example.ui.theme.CyberDarkSurface
@@ -339,6 +343,7 @@ fun PartnerDetailDialog(
         NewCapitalContributionDialog(
             partner = partner,
             treasuries = treasuries,
+            resolver = viewModel.exchangeRateResolver,
             onSubmitCash = { treasuryId, amountOrigMinor, curr, rate, notes ->
                 viewModel.postCapitalReceipt(
                     partnerPartyId = partner.id,
@@ -412,10 +417,14 @@ fun PartnerDetailDialog(
 fun NewCapitalContributionDialog(
     partner: PartyEntity,
     treasuries: List<TreasuryAccountEntity>,
+    resolver: ExchangeRateResolver? = null,
     onSubmitCash: (treasuryId: String, amountOrigMinor: Long, curr: CurrencyCode, rate: ExchangeRate, notes: String) -> Unit,
     onSubmitInKind: (assetName: String, amountOrigMinor: Long, curr: CurrencyCode, rate: ExchangeRate, usefulLife: Int, notes: String) -> Unit,
     onDismissRequest: () -> Unit
 ) {
+    val context = LocalContext.current
+    val effectiveResolver = resolver ?: remember { ExchangeRateResolver(AppDatabase.getInstance(context)) }
+    val today = remember { java.time.LocalDate.now().toEpochDay() }
     var contributionType by remember { mutableIntStateOf(0) } // 0: Cash, 1: In-Kind Asset
 
     // Cash fields
@@ -426,8 +435,25 @@ fun NewCapitalContributionDialog(
     var selectedCurrency by remember { mutableStateOf(CurrencyCode.YER) }
     var currencyExpanded by remember { mutableStateOf(false) }
     var amountText by remember { mutableStateOf("") }
-    var exchangeRateText by remember { mutableStateOf("530") }
+    var exchangeRateText by remember { mutableStateOf("") }
+    var resolvedRate by remember { mutableStateOf<ExchangeRate?>(null) }
     var notesText by remember { mutableStateOf("") }
+
+    LaunchedEffect(selectedCurrency) {
+        if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
+            exchangeRateText = "1"
+            resolvedRate = ExchangeRate.parity(CurrencyCode.FUNCTIONAL)
+        } else {
+            try {
+                val r = effectiveResolver.resolve(selectedCurrency, today)
+                resolvedRate = r
+                exchangeRateText = ExchangeRate.formatRateMicros(r.rateMicros)
+            } catch (e: Exception) {
+                resolvedRate = null
+                exchangeRateText = ""
+            }
+        }
+    }
 
     // In-Kind fields
     var assetNameText by remember { mutableStateOf("") }
@@ -575,10 +601,21 @@ fun NewCapitalContributionDialog(
 
                 if (selectedCurrency != CurrencyCode.YER) {
                     Spacer(modifier = Modifier.height(8.dp))
+                    ExchangeRateCard(
+                        currency = selectedCurrency,
+                        rate = resolvedRate
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
                     OutlinedTextField(
                         value = exchangeRateText,
-                        onValueChange = { exchangeRateText = it },
-                        label = { Text("سعر الصرف مقابل الريال اليمني (YER)") },
+                        onValueChange = {
+                            exchangeRateText = it
+                            val parsed = ExchangeRate.parseRateFromUserInput(it)
+                            if (parsed != null && parsed > 0L) {
+                                resolvedRate = ExchangeRate(selectedCurrency, CurrencyCode.FUNCTIONAL, parsed)
+                            }
+                        },
+                        label = { Text("سعر الصرف المعتمد مقابل الريال اليمني (YER)") },
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -594,16 +631,24 @@ fun NewCapitalContributionDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                val isAmountValid = (amountText.toDoubleOrNull() ?: 0.0) > 0.0
+                val parsedMoney = Money.parseFromUserInput(amountText, selectedCurrency)
+                val isAmountValid = (parsedMoney?.minor ?: 0L) > 0L
+                val parsedRateMicros = if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
+                    ExchangeRate.SCALE_MICROS
+                } else {
+                    ExchangeRate.parseRateFromUserInput(exchangeRateText) ?: (resolvedRate?.rateMicros ?: 0L)
+                }
+                val isRateValid = parsedRateMicros > 0L
                 val isInKindValid = contributionType == 0 || assetNameText.isNotBlank()
 
                 Button(
                     onClick = {
-                        val amtDouble = amountText.toDoubleOrNull() ?: 0.0
-                        val amtMinor = (amtDouble * 100.0).toLong()
-                        val rateDouble = exchangeRateText.toDoubleOrNull() ?: 1.0
-                        val rateMicros = if (selectedCurrency == CurrencyCode.YER) 1_000_000L else (rateDouble * 1_000_000L).toLong()
-                        val rate = ExchangeRate(selectedCurrency, CurrencyCode.YER, rateMicros)
+                        val amtMinor = parsedMoney!!.minor
+                        val rate = if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
+                            ExchangeRate.parity(CurrencyCode.FUNCTIONAL)
+                        } else {
+                            ExchangeRate(selectedCurrency, CurrencyCode.FUNCTIONAL, parsedRateMicros)
+                        }
 
                         if (contributionType == 0) {
                             onSubmitCash(
@@ -625,7 +670,7 @@ fun NewCapitalContributionDialog(
                             )
                         }
                     },
-                    enabled = isAmountValid && isInKindValid,
+                    enabled = isAmountValid && isRateValid && isInKindValid,
                     colors = ButtonDefaults.buttonColors(containerColor = MikroTikPrimary),
                     modifier = Modifier.fillMaxWidth()
                 ) {

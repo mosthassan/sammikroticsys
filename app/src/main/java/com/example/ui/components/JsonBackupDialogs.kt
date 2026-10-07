@@ -79,6 +79,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.core.model.CurrencyCode
 import com.example.core.model.ExchangeRate
+import com.example.core.model.Money
 import com.example.data.ledger.PurchaseItemSpec
 import com.example.data.local.entity.PartyEntity
 import com.example.data.local.entity.TreasuryAccountEntity
@@ -753,8 +754,8 @@ class EditPurchaseItemUiState(
     val quantity: Int get() = quantityText.toIntOrNull()?.coerceAtLeast(1) ?: 1
     val unitPriceMinor: Long
         get() {
-            val d = priceText.toDoubleOrNull() ?: 0.0
-            return (d * 100.0).roundToLong().coerceAtLeast(1L)
+            val m = Money.parseFromUserInput(priceText, CurrencyCode.FUNCTIONAL)?.minor
+            return (m ?: 0L).coerceAtLeast(1L)
         }
     val lineTotalMinor: Long get() = quantity * unitPriceMinor
 
@@ -789,10 +790,9 @@ fun EditImportedPurchaseDialog(
     var selectedCurrency by remember { mutableStateOf(draft.currencyCode) }
     var exchangeRateText by remember {
         mutableStateOf(
-            if (draft.exchangeRateMicros > 0L) (draft.exchangeRateMicros / 1_000_000L).toString()
-            else if (draft.currencyCode == CurrencyCode.USD) "530"
-            else if (draft.currencyCode == CurrencyCode.SAR) "140"
-            else "1"
+            if (draft.exchangeRateMicros > 0L) ExchangeRate.formatRateMicros(draft.exchangeRateMicros)
+            else if (draft.currencyCode == CurrencyCode.FUNCTIONAL) "1"
+            else ""
         )
     }
     var selectedTreasuryId by remember {
@@ -806,11 +806,7 @@ fun EditImportedPurchaseDialog(
         mutableStateListOf<EditPurchaseItemUiState>().apply {
             addAll(
                 draft.items.map { item ->
-                    val pStr = if (item.unitPriceMinor % 100L == 0L) {
-                        (item.unitPriceMinor / 100L).toString()
-                    } else {
-                        String.format(java.util.Locale.US, "%.2f", item.unitPriceMinor / 100.0)
-                    }
+                    val pStr = Money(item.unitPriceMinor, draft.currencyCode).format(includeSymbol = false)
                     EditPurchaseItemUiState(
                         description = item.description,
                         quantityText = item.quantity.toString(),
@@ -961,9 +957,7 @@ fun EditImportedPurchaseDialog(
                                                 selected = selectedCurrency == curr,
                                                 onClick = {
                                                     selectedCurrency = curr
-                                                    if (curr == CurrencyCode.USD && (exchangeRateText == "1" || exchangeRateText == "140")) exchangeRateText = "530"
-                                                    if (curr == CurrencyCode.SAR && (exchangeRateText == "1" || exchangeRateText == "530")) exchangeRateText = "140"
-                                                    if (curr == CurrencyCode.YER) exchangeRateText = "1"
+                                                    if (curr == CurrencyCode.FUNCTIONAL) exchangeRateText = "1"
                                                     treasuries.firstOrNull { it.currency == curr.name }?.let { selectedTreasuryId = it.id }
                                                 },
                                                 label = { Text(curr.name, fontSize = 11.sp, fontWeight = if (selectedCurrency == curr) FontWeight.Bold else FontWeight.Normal) }
@@ -1136,9 +1130,17 @@ fun EditImportedPurchaseDialog(
                     // 6. Summary Card
                     item {
                         val totalMinor = uiItems.sumOf { it.lineTotalMinor }
-                        val rateMicros = (exchangeRateText.toLongOrNull() ?: if (selectedCurrency == CurrencyCode.USD) 530L else if (selectedCurrency == CurrencyCode.SAR) 140L else 1L) * 1_000_000L
-                        val rate = if (selectedCurrency == CurrencyCode.FUNCTIONAL) ExchangeRate.parity(CurrencyCode.FUNCTIONAL) else ExchangeRate(selectedCurrency, CurrencyCode.FUNCTIONAL, rateMicros)
-                        val totalBase = rate.convert(totalMinor)
+                        val rateMicros = if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
+                            ExchangeRate.SCALE_MICROS
+                        } else {
+                            ExchangeRate.parseRateFromUserInput(exchangeRateText) ?: 0L
+                        }
+                        val rate = if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
+                            ExchangeRate.parity(CurrencyCode.FUNCTIONAL)
+                        } else if (rateMicros > 0L) {
+                            ExchangeRate(selectedCurrency, CurrencyCode.FUNCTIONAL, rateMicros)
+                        } else null
+                        val totalBase = rate?.convert(totalMinor) ?: 0L
 
                         Card(
                             modifier = Modifier.fillMaxWidth(),
@@ -1150,7 +1152,7 @@ fun EditImportedPurchaseDialog(
                                 Text("ملخص الفاتورة قبل الترحيل:", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = TextPrimaryDark)
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                     Text("إجمالي البنود (${uiItems.size} بند):", color = TextSecondaryDark, fontSize = 12.sp)
-                                    val formattedTotal = String.format(java.util.Locale.US, "%.2f", totalMinor / 100.0)
+                                    val formattedTotal = Money(totalMinor, selectedCurrency).format(includeSymbol = false)
                                     Text("$formattedTotal ${selectedCurrency.name}", color = TextPrimaryDark, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                 }
                                 if (selectedCurrency != CurrencyCode.FUNCTIONAL) {
@@ -1174,10 +1176,20 @@ fun EditImportedPurchaseDialog(
                 Spacer(modifier = Modifier.height(10.dp))
 
                 // Actions
+                val validRateMicros = if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
+                    ExchangeRate.SCALE_MICROS
+                } else {
+                    ExchangeRate.parseRateFromUserInput(exchangeRateText) ?: 0L
+                }
+                val isRateValid = validRateMicros > 0L
+
                 Button(
                     onClick = {
-                        val rateMicros = (exchangeRateText.toLongOrNull() ?: if (selectedCurrency == CurrencyCode.USD) 530L else if (selectedCurrency == CurrencyCode.SAR) 140L else 1L) * 1_000_000L
-                        val rate = if (selectedCurrency == CurrencyCode.FUNCTIONAL) ExchangeRate.parity(CurrencyCode.FUNCTIONAL) else ExchangeRate(selectedCurrency, CurrencyCode.FUNCTIONAL, rateMicros)
+                        val rate = if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
+                            ExchangeRate.parity(CurrencyCode.FUNCTIONAL)
+                        } else {
+                            ExchangeRate(selectedCurrency, CurrencyCode.FUNCTIONAL, validRateMicros)
+                        }
                         onSaveAndPost(
                             vendorName.trim().ifBlank { "مورد عام" },
                             isCash,
@@ -1188,7 +1200,7 @@ fun EditImportedPurchaseDialog(
                             notes
                         )
                     },
-                    enabled = uiItems.isNotEmpty() && (!isCash || !selectedTreasuryId.isNullOrBlank()),
+                    enabled = uiItems.isNotEmpty() && (!isCash || !selectedTreasuryId.isNullOrBlank()) && isRateValid,
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = if (isCash) StatusOnline else MikroTikPrimary)
                 ) {
