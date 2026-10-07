@@ -22,3 +22,15 @@ class SignificantRateChangeException(
     val percentChange: Double,
     message: String = "Rate change exceeds 10% (from $oldRateMicros to $newRateMicros). Confirmation required."
 ) : IllegalArgumentException(message)
+
+/**
+ * Thrown when a disbursement, transfer, or currency exchange would cause a treasury's
+ * net balance in its original currency to fall below zero and allowNegative is false.
+ * Zero-Overdraft Invariant (B.1).
+ */
+class InsufficientTreasuryFundsException(
+    val treasuryId: String,
+    val availableMinor: Long,
+    val requiredMinor: Long,
+    message: String = "Insufficient treasury funds in $treasuryId: available $availableMinor minor units, required $requiredMinor minor units"
+) : IllegalStateException(message)

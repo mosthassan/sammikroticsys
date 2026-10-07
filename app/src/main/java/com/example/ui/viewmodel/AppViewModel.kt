@@ -724,6 +724,37 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun postCurrencyExchange(
+        sourceTreasuryId: String,
+        sourceAmountOrigMinor: Long,
+        destTreasuryId: String,
+        destAmountOrigMinor: Long,
+        notes: String,
+        onSuccess: () -> Unit
+    ) {
+        viewModelScope.launch {
+            try {
+                val now = getLocalNow()
+                val fiscalYear = now.year
+                val today = now.toEpochDay()
+                writer.postCurrencyExchange(
+                    sourceTreasuryId = sourceTreasuryId,
+                    sourceAmountOrigMinor = sourceAmountOrigMinor,
+                    destTreasuryId = destTreasuryId,
+                    destAmountOrigMinor = destAmountOrigMinor,
+                    fiscalYear = fiscalYear,
+                    dateEpochDay = today,
+                    notes = notes
+                )
+                _userMessage.emit("تمت مصارفة العملات بنجاح")
+                refreshDashboard()
+                onSuccess()
+            } catch (e: Exception) {
+                _userMessage.emit("فشلت المصارفة: ${e.message}")
+            }
+        }
+    }
+
     fun runDepreciation(assetId: String, year: Int, month: Int) {
         viewModelScope.launch {
             try {

@@ -248,6 +248,15 @@ internal interface JournalDao {
         WHERE treasuryId = :treasuryId AND baseCreditMinor > 0
     """)
     suspend fun getTreasuryCreditOrigTotal(treasuryId: String): Long
+
+    @Query("""
+        SELECT COALESCE(
+            SUM(CASE WHEN baseDebitMinor > 0 THEN origMinor ELSE -origMinor END), 0
+        )
+        FROM journal_lines
+        WHERE treasuryId = :treasuryId
+    """)
+    suspend fun getNetOrigBalanceForTreasury(treasuryId: String): Long
 }
 
 @Dao
@@ -329,6 +338,12 @@ interface TreasuryDao {
 
     @Query("SELECT * FROM treasury_accounts WHERE isActive = 1 ORDER BY name ASC")
     suspend fun getAllTreasuriesSync(): List<TreasuryAccountEntity>
+
+    @Update
+    suspend fun updateTreasury(treasury: TreasuryAccountEntity)
+
+    @Query("UPDATE treasury_accounts SET allowNegative = :allowNegative WHERE id = :id")
+    suspend fun setAllowNegative(id: String, allowNegative: Boolean)
 }
 
 @Dao

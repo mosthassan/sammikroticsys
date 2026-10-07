@@ -414,6 +414,206 @@ object PostingRules {
     }
 
     /**
+     * Payment Voucher: Vendor Settlement with Realized FX Gain/Loss (IAS 21):
+     * DR 2101 Accounts Payable (relieved at invoice book base value)
+     * DR 5901 FX Loss (if cash paid base > liability relieved base) OR CR 4901 FX Gain (if cash paid base < liability relieved base)
+     * CR Treasury (paid at settlement rate)
+     */
+    fun createVendorPaymentWithFxDraft(
+        treasuryGlCode: String,
+        treasuryId: String,
+        vendorPartyId: String,
+        paidAmountOrigMinor: Long,
+        paymentCurrency: CurrencyCode,
+        paymentRate: ExchangeRate,
+        invoiceRelievedOrigMinor: Long,
+        invoiceCurrency: CurrencyCode,
+        invoiceRate: ExchangeRate,
+        dateEpochDay: Long,
+        memo: String
+    ): JournalDraft {
+        require(paidAmountOrigMinor > 0L) { "Payment amount must be positive" }
+        require(invoiceRelievedOrigMinor > 0L) { "Invoice relieved amount must be positive" }
+
+        val cashPaidBase = paymentRate.convert(paidAmountOrigMinor)
+        val payableRelievedBase = invoiceRate.convert(invoiceRelievedOrigMinor)
+
+        val lines = mutableListOf<JournalDraftLine>()
+        var lineNo = 1
+
+        // DR Accounts Payable (2101) with book value of the invoice
+        lines.add(
+            JournalDraftLine(
+                lineNo = lineNo++,
+                accountCode = AccountConstants.ACCOUNTS_PAYABLE,
+                partyId = vendorPartyId,
+                origMinor = invoiceRelievedOrigMinor,
+                currency = invoiceCurrency,
+                exchangeRateMicros = invoiceRate.rateMicros,
+                baseDebitMinor = payableRelievedBase,
+                baseCreditMinor = 0L,
+                memo = memo
+            )
+        )
+
+        if (cashPaidBase > payableRelievedBase) {
+            // Paid more base currency than booked invoice -> FX Loss (DR 5901)
+            val lossMinor = cashPaidBase - payableRelievedBase
+            lines.add(
+                JournalDraftLine(
+                    lineNo = lineNo++,
+                    accountCode = AccountConstants.REALIZED_FX_LOSS,
+                    origMinor = lossMinor,
+                    currency = CurrencyCode.FUNCTIONAL,
+                    exchangeRateMicros = ExchangeRate.SCALE_MICROS,
+                    baseDebitMinor = lossMinor,
+                    baseCreditMinor = 0L,
+                    memo = "خسارة تسوية فروق عملة: $memo"
+                )
+            )
+        }
+
+        // CR Treasury with actual cash paid at payment rate
+        lines.add(
+            JournalDraftLine(
+                lineNo = lineNo++,
+                accountCode = treasuryGlCode,
+                treasuryId = treasuryId,
+                origMinor = paidAmountOrigMinor,
+                currency = paymentCurrency,
+                exchangeRateMicros = paymentRate.rateMicros,
+                baseDebitMinor = 0L,
+                baseCreditMinor = cashPaidBase,
+                memo = memo
+            )
+        )
+
+        if (cashPaidBase < payableRelievedBase) {
+            // Paid less base currency than booked invoice -> FX Gain (CR 4901)
+            val gainMinor = payableRelievedBase - cashPaidBase
+            lines.add(
+                JournalDraftLine(
+                    lineNo = lineNo,
+                    accountCode = AccountConstants.REALIZED_FX_GAIN,
+                    origMinor = gainMinor,
+                    currency = CurrencyCode.FUNCTIONAL,
+                    exchangeRateMicros = ExchangeRate.SCALE_MICROS,
+                    baseDebitMinor = 0L,
+                    baseCreditMinor = gainMinor,
+                    memo = "أرباح تسوية فروق عملة: $memo"
+                )
+            )
+        }
+
+        return JournalDraft(
+            type = JournalEntryType.NORMAL,
+            entryDateEpochDay = dateEpochDay,
+            memo = memo,
+            lines = lines
+        )
+    }
+
+    /**
+     * Partner Paid Out-of-Pocket (B.5):
+     * DR 2101 Accounts Payable (relieved at invoice rate or transaction rate)
+     * DR 5901 FX Loss (if paid base > relieved base) OR CR 4901 FX Gain (if paid base < relieved base)
+     * CR 3201 Partner Current (paying partner) at transaction-date rate.
+     * Cash boxes remain untouched.
+     */
+    fun createPartnerPersonalPaymentDraft(
+        payingPartnerPartyId: String,
+        vendorPartyId: String,
+        paidAmountOrigMinor: Long,
+        paymentCurrency: CurrencyCode,
+        paymentRate: ExchangeRate,
+        invoiceRelievedOrigMinor: Long,
+        invoiceCurrency: CurrencyCode,
+        invoiceRate: ExchangeRate,
+        dateEpochDay: Long,
+        memo: String
+    ): JournalDraft {
+        require(paidAmountOrigMinor > 0L) { "Payment amount must be positive" }
+        require(invoiceRelievedOrigMinor > 0L) { "Invoice relieved amount must be positive" }
+
+        val partnerPaidBase = paymentRate.convert(paidAmountOrigMinor)
+        val payableRelievedBase = invoiceRate.convert(invoiceRelievedOrigMinor)
+
+        val lines = mutableListOf<JournalDraftLine>()
+        var lineNo = 1
+
+        // DR Accounts Payable (2101) with book value of the invoice
+        lines.add(
+            JournalDraftLine(
+                lineNo = lineNo++,
+                accountCode = AccountConstants.ACCOUNTS_PAYABLE,
+                partyId = vendorPartyId,
+                origMinor = invoiceRelievedOrigMinor,
+                currency = invoiceCurrency,
+                exchangeRateMicros = invoiceRate.rateMicros,
+                baseDebitMinor = payableRelievedBase,
+                baseCreditMinor = 0L,
+                memo = memo
+            )
+        )
+
+        if (partnerPaidBase > payableRelievedBase) {
+            // Paid more base than booked liability -> FX Loss (DR 5901)
+            val lossMinor = partnerPaidBase - payableRelievedBase
+            lines.add(
+                JournalDraftLine(
+                    lineNo = lineNo++,
+                    accountCode = AccountConstants.REALIZED_FX_LOSS,
+                    origMinor = lossMinor,
+                    currency = CurrencyCode.FUNCTIONAL,
+                    exchangeRateMicros = ExchangeRate.SCALE_MICROS,
+                    baseDebitMinor = lossMinor,
+                    baseCreditMinor = 0L,
+                    memo = "خسارة تسوية فروق عملة: $memo"
+                )
+            )
+        }
+
+        // CR Partner Current (3201) with actual value paid by the partner
+        lines.add(
+            JournalDraftLine(
+                lineNo = lineNo++,
+                accountCode = AccountConstants.PARTNER_CURRENT,
+                partyId = payingPartnerPartyId,
+                origMinor = paidAmountOrigMinor,
+                currency = paymentCurrency,
+                exchangeRateMicros = paymentRate.rateMicros,
+                baseDebitMinor = 0L,
+                baseCreditMinor = partnerPaidBase,
+                memo = memo
+            )
+        )
+
+        if (partnerPaidBase < payableRelievedBase) {
+            // Paid less base than booked liability -> FX Gain (CR 4901)
+            val gainMinor = payableRelievedBase - partnerPaidBase
+            lines.add(
+                JournalDraftLine(
+                    lineNo = lineNo,
+                    accountCode = AccountConstants.REALIZED_FX_GAIN,
+                    origMinor = gainMinor,
+                    currency = CurrencyCode.FUNCTIONAL,
+                    exchangeRateMicros = ExchangeRate.SCALE_MICROS,
+                    baseDebitMinor = 0L,
+                    baseCreditMinor = gainMinor,
+                    memo = "أرباح تسوية فروق عملة: $memo"
+                )
+            )
+        }
+
+        return JournalDraft(
+            type = JournalEntryType.NORMAL,
+            entryDateEpochDay = dateEpochDay,
+            memo = memo,
+            lines = lines
+        )
+    }
+
+    /**
      * Payment Voucher: Direct Expense (e.g. 5101 Upstream ISP or 5201 Operating)
      * DR Expense Account (5xxx)
      * CR Treasury
@@ -535,6 +735,12 @@ object PostingRules {
         dateEpochDay: Long,
         memo: String
     ): JournalDraft {
+        require(sourceCurrency == destCurrency) {
+            "Treasury transfer only supports single-currency transfers between accounts of the same currency. Use CURRENCY_EXCHANGE for cross-currency transfers."
+        }
+        require(sourceAmountOrigMinor == destAmountOrigMinor) {
+            "Single-currency transfer amounts must be equal"
+        }
         val sourceBase = sourceRate.convert(sourceAmountOrigMinor)
         val destBase = destRate.convert(destAmountOrigMinor)
         val lines = mutableListOf<JournalDraftLine>()
@@ -601,6 +807,74 @@ object PostingRules {
                 )
             )
         }
+
+        return JournalDraft(
+            type = JournalEntryType.NORMAL,
+            entryDateEpochDay = dateEpochDay,
+            memo = memo,
+            lines = lines
+        )
+    }
+
+    /**
+     * Currency Exchange (B.3):
+     * DR Destination Treasury (Original = Received, Base YER = Source Base YER)
+     * CR Source Treasury (Original = Paid, Base YER = Source Base YER)
+     * Zero FX gain/loss at exchange time.
+     */
+    fun createCurrencyExchangeDraft(
+        sourceTreasuryGlCode: String,
+        sourceTreasuryId: String,
+        sourceAmountOrigMinor: Long,
+        sourceCurrency: CurrencyCode,
+        destTreasuryGlCode: String,
+        destTreasuryId: String,
+        destAmountOrigMinor: Long,
+        destCurrency: CurrencyCode,
+        sourceBaseMinor: Long,
+        dateEpochDay: Long,
+        memo: String
+    ): JournalDraft {
+        require(sourceAmountOrigMinor > 0L) { "Source amount must be positive" }
+        require(destAmountOrigMinor > 0L) { "Destination amount must be positive" }
+        require(sourceBaseMinor > 0L) { "Base amount must be positive" }
+
+        val destRateMicros = if (destCurrency == CurrencyCode.FUNCTIONAL) {
+            ExchangeRate.SCALE_MICROS
+        } else {
+            (sourceBaseMinor * ExchangeRate.SCALE_MICROS) / destAmountOrigMinor
+        }
+
+        val sourceRateMicros = if (sourceCurrency == CurrencyCode.FUNCTIONAL) {
+            ExchangeRate.SCALE_MICROS
+        } else {
+            (sourceBaseMinor * ExchangeRate.SCALE_MICROS) / sourceAmountOrigMinor
+        }
+
+        val lines = listOf(
+            JournalDraftLine(
+                lineNo = 1,
+                accountCode = destTreasuryGlCode,
+                treasuryId = destTreasuryId,
+                origMinor = destAmountOrigMinor,
+                currency = destCurrency,
+                exchangeRateMicros = destRateMicros,
+                baseDebitMinor = sourceBaseMinor,
+                baseCreditMinor = 0L,
+                memo = "إيداع مصارفة: $memo"
+            ),
+            JournalDraftLine(
+                lineNo = 2,
+                accountCode = sourceTreasuryGlCode,
+                treasuryId = sourceTreasuryId,
+                origMinor = sourceAmountOrigMinor,
+                currency = sourceCurrency,
+                exchangeRateMicros = sourceRateMicros,
+                baseDebitMinor = 0L,
+                baseCreditMinor = sourceBaseMinor,
+                memo = "سحب مصارفة: $memo"
+            )
+        )
 
         return JournalDraft(
             type = JournalEntryType.NORMAL,
@@ -699,10 +973,12 @@ object PostingRules {
         settlementRate: ExchangeRate,
         invoiceRate: ExchangeRate,
         dateEpochDay: Long,
-        memo: String
+        memo: String,
+        invoiceCurrency: CurrencyCode = currency,
+        invoiceRelievedOrigMinor: Long = amountOrigMinor
     ): JournalDraft {
         val cashReceivedBase = settlementRate.convert(amountOrigMinor)
-        val receivableRelievedBase = invoiceRate.convert(amountOrigMinor)
+        val receivableRelievedBase = invoiceRate.convert(invoiceRelievedOrigMinor)
 
         val lines = mutableListOf<JournalDraftLine>()
         var lineNo = 1
@@ -745,8 +1021,8 @@ object PostingRules {
                 lineNo = lineNo++,
                 accountCode = AccountConstants.ACCOUNTS_RECEIVABLE,
                 partyId = partyId,
-                origMinor = amountOrigMinor,
-                currency = currency,
+                origMinor = invoiceRelievedOrigMinor,
+                currency = invoiceCurrency,
                 exchangeRateMicros = invoiceRate.rateMicros,
                 baseDebitMinor = 0L,
                 baseCreditMinor = receivableRelievedBase,

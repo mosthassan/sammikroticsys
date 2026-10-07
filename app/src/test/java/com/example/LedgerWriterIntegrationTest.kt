@@ -179,6 +179,7 @@ class LedgerWriterIntegrationTest {
             val rate = ExchangeRate.parity(CurrencyCode.YER)
 
             // 1. Purchase MikroTik Router for 200,000 YER (20,000,000 minor)
+            db.treasuryDao().setAllowNegative("TR_MAIN_YER", true)
             val purchaseInv = writer.postPurchaseInvoice(
                 vendorPartyId = vendor.id,
                 fiscalYear = 2026,
@@ -440,6 +441,7 @@ class LedgerWriterIntegrationTest {
             val vendor = PartyEntity("RAND_VEND", "مورد عشوائي", isVendor = true)
             db.partyDao().insertParty(customer)
             db.partyDao().insertParty(vendor)
+            db.treasuryDao().setAllowNegative("TR_MAIN_YER", true)
 
             val rate = ExchangeRate.parity(CurrencyCode.YER)
             val openInvoices = mutableListOf<String>()

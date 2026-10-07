@@ -11,6 +11,7 @@ import com.example.core.ledger.PostingRules
 import com.example.core.ledger.PurchaseItemDraft
 import com.example.core.model.CurrencyCode
 import com.example.core.model.ExchangeRate
+import com.example.core.model.InsufficientTreasuryFundsException
 import com.example.core.model.MissingExchangeRateException
 import com.example.core.model.RateSource
 import com.example.core.model.RateZone
@@ -34,6 +35,22 @@ class LedgerWriter(
     private val enableInvariantValidation: Boolean = true
 ) {
     private val invariants = LedgerInvariants(db)
+
+    /**
+     * Enforces the Zero-Overdraft Invariant (B.1):
+     * Calculates the treasury's net balance in its original currency prior to any disbursement.
+     * If the resulting balance would be < 0 and allowNegative == false, throws InsufficientTreasuryFundsException.
+     */
+    private suspend fun validateTreasuryDisbursement(treasuryId: String, requiredMinor: Long) {
+        val treasury = db.treasuryDao().getTreasuryById(treasuryId)
+            ?: error("Treasury account $treasuryId not found")
+        if (!treasury.allowNegative) {
+            val availableMinor = db.journalDao().getNetOrigBalanceForTreasury(treasuryId)
+            if (availableMinor < requiredMinor) {
+                throw InsufficientTreasuryFundsException(treasuryId, availableMinor, requiredMinor)
+            }
+        }
+    }
 
     /**
      * Posts a Sales Invoice (Credit or Cash):
@@ -204,9 +221,6 @@ class LedgerWriter(
                 require(invDoc.partyId == partyId) {
                     "Allocated invoice party (${invDoc.partyId}) does not match receipt party ($partyId)"
                 }
-                require(invDoc.currency == currency.name) {
-                    "Allocated invoice currency (${invDoc.currency}) does not match receipt currency (${currency.name})"
-                }
                 val activeAllocs = db.allocationDao().getActiveAllocationsForInvoice(alloc.invoiceDocId)
                 val previouslyAllocated = activeAllocs.sumOf { it.allocatedOrigMinor }
                 val remainingInvoiceBalance = invDoc.totalMinor - previouslyAllocated
@@ -239,12 +253,16 @@ class LedgerWriter(
         db.documentDao().insertDocument(docEntity)
 
         // Check if there are allocations with FX differences
-        if (allocations.isNotEmpty() && currency != CurrencyCode.FUNCTIONAL) {
-            // Check first allocated invoice to determine if settlement rate differs from invoice rate
+        if (allocations.isNotEmpty()) {
             val firstAlloc = allocations.first()
             val invDoc = db.documentDao().getDocumentById(firstAlloc.invoiceDocId)
-            if (invDoc != null && invDoc.exchangeRateMicros != exchangeRate.rateMicros) {
-                val invRate = ExchangeRate(currency, CurrencyCode.FUNCTIONAL, invDoc.exchangeRateMicros)
+            val invCurrency = if (invDoc != null) CurrencyCode.fromString(invDoc.currency) else currency
+            val invRate = if (invDoc != null) ExchangeRate(invCurrency, CurrencyCode.FUNCTIONAL, invDoc.exchangeRateMicros) else exchangeRate
+            val totalRelievedOrig = allocations.sumOf { it.allocatedOrigMinor }
+            val cashReceivedBase = exchangeRate.convert(amountOrigMinor)
+            val receivableRelievedBase = invRate.convert(totalRelievedOrig)
+
+            if (invDoc != null && (cashReceivedBase != receivableRelievedBase || invCurrency != currency)) {
                 val draft = PostingRules.createCustomerReceiptWithFxDraft(
                     treasuryGlCode = treasury.glAccountCode,
                     treasuryId = treasuryId,
@@ -254,7 +272,9 @@ class LedgerWriter(
                     settlementRate = exchangeRate,
                     invoiceRate = invRate,
                     dateEpochDay = dateEpochDay,
-                    memo = "سند قبض عميل #$docNumber (مع تسوية فروق صرف)"
+                    memo = "سند قبض عميل #$docNumber (مع تسوية فروق صرف)",
+                    invoiceCurrency = invCurrency,
+                    invoiceRelievedOrigMinor = totalRelievedOrig
                 )
                 persistJournalDraft(docId, docNumber, draft)
             } else {
@@ -286,7 +306,11 @@ class LedgerWriter(
 
         // Record allocations
         allocations.forEach { alloc ->
-            val allocBase = exchangeRate.convert(alloc.allocatedOrigMinor)
+            val invDoc = db.documentDao().getDocumentById(alloc.invoiceDocId)
+            val invRate = if (invDoc != null) {
+                ExchangeRate(CurrencyCode.fromString(invDoc.currency), CurrencyCode.FUNCTIONAL, invDoc.exchangeRateMicros)
+            } else exchangeRate
+            val allocBase = invRate.convert(alloc.allocatedOrigMinor)
             db.allocationDao().insertAllocation(
                 AllocationEntity(
                     id = UuidUtils.newTimeOrderedId(),
@@ -550,11 +574,11 @@ class LedgerWriter(
     /**
      * Posts a Payment Voucher:
      * DR 2101 (Vendor Settlement) OR DR 5101 (Direct ISP Subscription) OR DR 3201 (Partner Drawing),
-     * CR Treasury.
+     * CR Treasury (or CR Partner Current 3201 if paymentSource == PARTNER_PERSONAL).
      */
     suspend fun postPaymentVoucher(
         recipientPartyId: String,
-        treasuryId: String,
+        treasuryId: String? = null,
         fiscalYear: Int,
         dateEpochDay: Long,
         amountOrigMinor: Long,
@@ -566,18 +590,43 @@ class LedgerWriter(
         notes: String = "",
         rateZone: RateZone = RateZone.DEFAULT,
         rateSource: RateSource = RateSource.SYSTEM_DAILY,
+        paymentSource: PaymentSource = PaymentSource.TREASURY,
+        payingPartnerPartyId: String? = null,
         idempotencyKey: String? = null
     ): DocumentEntity = db.withTransaction {
+        idempotencyKey?.let { key ->
+            val existingDocId = db.idempotencyDao().getDocIdForKey(key)
+            if (existingDocId != null) {
+                return@withTransaction db.documentDao().getDocumentById(existingDocId)!!
+            }
+        }
+
         validatePeriodIsOpen(dateEpochDay)
         validateExchangeRateGuardrail(currency, exchangeRate)
-        val treasury = db.treasuryDao().getTreasuryById(treasuryId)
-            ?: error("Treasury account $treasuryId not found")
 
-        // Validate vendor allocations
+        val treasury = if (paymentSource == PaymentSource.TREASURY) {
+            require(!treasuryId.isNullOrBlank()) { "Treasury account ID is required for treasury disbursement" }
+            val t = db.treasuryDao().getTreasuryById(treasuryId)
+                ?: error("Treasury account $treasuryId not found")
+            // Zero-overdraft invariant check prior to allocating sequence number
+            validateTreasuryDisbursement(treasuryId, amountOrigMinor)
+            t
+        } else {
+            require(!payingPartnerPartyId.isNullOrBlank()) { "Paying partner party ID is required for partner out-of-pocket payment" }
+            val partner = db.partyDao().getPartyById(payingPartnerPartyId)
+                ?: error("Paying partner $payingPartnerPartyId not found")
+            require(partner.isPartner) { "Party $payingPartnerPartyId is not registered as a partner" }
+            null
+        }
+
+        // Validate vendor allocations (cross-currency supported, legacy currency match removed)
         if (invoiceAllocations.isNotEmpty()) {
-            val totalAllocated = invoiceAllocations.sumOf { it.allocatedOrigMinor }
-            require(totalAllocated <= amountOrigMinor) {
-                "Total allocated amount ($totalAllocated) exceeds payment amount ($amountOrigMinor)"
+            val firstAllocDoc = db.documentDao().getDocumentById(invoiceAllocations.first().invoiceDocId)
+            if (firstAllocDoc != null && firstAllocDoc.currency == currency.name) {
+                val totalAllocated = invoiceAllocations.sumOf { it.allocatedOrigMinor }
+                require(totalAllocated <= amountOrigMinor) {
+                    "Total allocated amount ($totalAllocated) exceeds payment amount ($amountOrigMinor)"
+                }
             }
             invoiceAllocations.forEach { alloc ->
                 val invDoc = db.documentDao().getDocumentById(alloc.invoiceDocId)
@@ -587,9 +636,6 @@ class LedgerWriter(
                 }
                 require(invDoc.partyId == recipientPartyId) {
                     "Allocated purchase invoice party (${invDoc.partyId}) does not match vendor ($recipientPartyId)"
-                }
-                require(invDoc.currency == currency.name) {
-                    "Allocated purchase invoice currency (${invDoc.currency}) does not match payment currency (${currency.name})"
                 }
                 val activeAllocs = db.allocationDao().getActiveAllocationsForInvoice(alloc.invoiceDocId)
                 val previouslyAllocated = activeAllocs.sumOf { it.allocatedOrigMinor }
@@ -622,52 +668,114 @@ class LedgerWriter(
         )
         db.documentDao().insertDocument(docEntity)
 
-        val draft = when (paymentType) {
-            PaymentVoucherType.VENDOR_SETTLEMENT -> PostingRules.createVendorPaymentDraft(
-                treasuryGlCode = treasury.glAccountCode,
-                treasuryId = treasuryId,
+        val draft = if (paymentSource == PaymentSource.PARTNER_PERSONAL) {
+            val totalRelievedOrig = if (invoiceAllocations.isNotEmpty()) invoiceAllocations.sumOf { it.allocatedOrigMinor } else amountOrigMinor
+            val invDoc = if (invoiceAllocations.isNotEmpty()) db.documentDao().getDocumentById(invoiceAllocations.first().invoiceDocId) else null
+            val invCurrency = if (invDoc != null) CurrencyCode.fromString(invDoc.currency) else currency
+            val invRate = if (invDoc != null) ExchangeRate(invCurrency, CurrencyCode.FUNCTIONAL, invDoc.exchangeRateMicros) else exchangeRate
+            PostingRules.createPartnerPersonalPaymentDraft(
+                payingPartnerPartyId = payingPartnerPartyId!!,
                 vendorPartyId = recipientPartyId,
-                amountOrigMinor = amountOrigMinor,
-                currency = currency,
-                exchangeRate = exchangeRate,
+                paidAmountOrigMinor = amountOrigMinor,
+                paymentCurrency = currency,
+                paymentRate = exchangeRate,
+                invoiceRelievedOrigMinor = totalRelievedOrig,
+                invoiceCurrency = invCurrency,
+                invoiceRate = invRate,
                 dateEpochDay = dateEpochDay,
-                memo = "سند صرف سداد مورد #$docNumber"
+                memo = if (notes.isNotBlank()) notes else "سداد مورد من حساب الشريك الشخصي #$docNumber"
             )
-            PaymentVoucherType.DIRECT_ISP_SERVICE -> PostingRules.createDirectExpensePaymentDraft(
-                treasuryGlCode = treasury.glAccountCode,
-                treasuryId = treasuryId,
-                expenseAccountCode = AccountConstants.DIRECT_ISP_SERVICE_COST,
-                amountOrigMinor = amountOrigMinor,
-                currency = currency,
-                exchangeRate = exchangeRate,
-                dateEpochDay = dateEpochDay,
-                memo = "سند صرف اشتراك إنترنت رئيسي (Starlink/Fiber) #$docNumber"
-            )
-            PaymentVoucherType.OPERATING_EXPENSE -> PostingRules.createDirectExpensePaymentDraft(
-                treasuryGlCode = treasury.glAccountCode,
-                treasuryId = treasuryId,
-                expenseAccountCode = customExpenseCode ?: AccountConstants.OPERATING_EXPENSES,
-                amountOrigMinor = amountOrigMinor,
-                currency = currency,
-                exchangeRate = exchangeRate,
-                dateEpochDay = dateEpochDay,
-                memo = "سند صرف مصاريف تشغيل #$docNumber"
-            )
-            PaymentVoucherType.PARTNER_DRAWINGS -> PostingRules.createPartnerDrawingsDraft(
-                treasuryGlCode = treasury.glAccountCode,
-                treasuryId = treasuryId,
-                partnerPartyId = recipientPartyId,
-                amountOrigMinor = amountOrigMinor,
-                currency = currency,
-                exchangeRate = exchangeRate,
-                dateEpochDay = dateEpochDay,
-                memo = "سند صرف مسحوبات شريك #$docNumber"
-            )
+        } else {
+            val t = treasury!!
+            when (paymentType) {
+                PaymentVoucherType.VENDOR_SETTLEMENT -> {
+                    if (invoiceAllocations.isNotEmpty()) {
+                        val firstAlloc = invoiceAllocations.first()
+                        val invDoc = db.documentDao().getDocumentById(firstAlloc.invoiceDocId)!!
+                        val invCurrency = CurrencyCode.fromString(invDoc.currency)
+                        val invRate = ExchangeRate(invCurrency, CurrencyCode.FUNCTIONAL, invDoc.exchangeRateMicros)
+                        val totalRelievedOrig = invoiceAllocations.sumOf { it.allocatedOrigMinor }
+                        val cashPaidBase = exchangeRate.convert(amountOrigMinor)
+                        val payableRelievedBase = invRate.convert(totalRelievedOrig)
+                        if (cashPaidBase != payableRelievedBase || invCurrency != currency) {
+                            PostingRules.createVendorPaymentWithFxDraft(
+                                treasuryGlCode = t.glAccountCode,
+                                treasuryId = treasuryId!!,
+                                vendorPartyId = recipientPartyId,
+                                paidAmountOrigMinor = amountOrigMinor,
+                                paymentCurrency = currency,
+                                paymentRate = exchangeRate,
+                                invoiceRelievedOrigMinor = totalRelievedOrig,
+                                invoiceCurrency = invCurrency,
+                                invoiceRate = invRate,
+                                dateEpochDay = dateEpochDay,
+                                memo = "سند صرف سداد مورد #$docNumber (مع تسوية فروق صرف)"
+                            )
+                        } else {
+                            PostingRules.createVendorPaymentDraft(
+                                treasuryGlCode = t.glAccountCode,
+                                treasuryId = treasuryId!!,
+                                vendorPartyId = recipientPartyId,
+                                amountOrigMinor = amountOrigMinor,
+                                currency = currency,
+                                exchangeRate = exchangeRate,
+                                dateEpochDay = dateEpochDay,
+                                memo = "سند صرف سداد مورد #$docNumber"
+                            )
+                        }
+                    } else {
+                        PostingRules.createVendorPaymentDraft(
+                            treasuryGlCode = t.glAccountCode,
+                            treasuryId = treasuryId!!,
+                            vendorPartyId = recipientPartyId,
+                            amountOrigMinor = amountOrigMinor,
+                            currency = currency,
+                            exchangeRate = exchangeRate,
+                            dateEpochDay = dateEpochDay,
+                            memo = "سند صرف سداد مورد #$docNumber"
+                        )
+                    }
+                }
+                PaymentVoucherType.DIRECT_ISP_SERVICE -> PostingRules.createDirectExpensePaymentDraft(
+                    treasuryGlCode = t.glAccountCode,
+                    treasuryId = treasuryId!!,
+                    expenseAccountCode = AccountConstants.DIRECT_ISP_SERVICE_COST,
+                    amountOrigMinor = amountOrigMinor,
+                    currency = currency,
+                    exchangeRate = exchangeRate,
+                    dateEpochDay = dateEpochDay,
+                    memo = "سند صرف اشتراك إنترنت رئيسي (Starlink/Fiber) #$docNumber"
+                )
+                PaymentVoucherType.OPERATING_EXPENSE -> PostingRules.createDirectExpensePaymentDraft(
+                    treasuryGlCode = t.glAccountCode,
+                    treasuryId = treasuryId!!,
+                    expenseAccountCode = customExpenseCode ?: AccountConstants.OPERATING_EXPENSES,
+                    amountOrigMinor = amountOrigMinor,
+                    currency = currency,
+                    exchangeRate = exchangeRate,
+                    dateEpochDay = dateEpochDay,
+                    memo = "سند صرف مصاريف تشغيل #$docNumber"
+                )
+                PaymentVoucherType.PARTNER_DRAWINGS -> PostingRules.createPartnerDrawingsDraft(
+                    treasuryGlCode = t.glAccountCode,
+                    treasuryId = treasuryId!!,
+                    partnerPartyId = recipientPartyId,
+                    amountOrigMinor = amountOrigMinor,
+                    currency = currency,
+                    exchangeRate = exchangeRate,
+                    dateEpochDay = dateEpochDay,
+                    memo = "سند صرف مسحوبات شريك #$docNumber"
+                )
+            }
         }
         persistJournalDraft(docId, docNumber, draft)
 
         invoiceAllocations.forEach { alloc ->
-            val allocBase = exchangeRate.convert(alloc.allocatedOrigMinor)
+            val invDoc = db.documentDao().getDocumentById(alloc.invoiceDocId)
+            val invRate = if (invDoc != null) {
+                ExchangeRate(CurrencyCode.fromString(invDoc.currency), CurrencyCode.FUNCTIONAL, invDoc.exchangeRateMicros)
+            } else exchangeRate
+            val allocBase = invRate.convert(alloc.allocatedOrigMinor)
             db.allocationDao().insertAllocation(
                 AllocationEntity(
                     id = UuidUtils.newTimeOrderedId(),
@@ -688,7 +796,8 @@ class LedgerWriter(
 
     /**
      * Posts a Treasury Transfer:
-     * DR Destination Treasury, CR Source Treasury, with optional FX Gain (4901) or Loss (5901).
+     * Enforces single-currency movements only between accounts of the same currency.
+     * DR Destination Treasury, CR Source Treasury.
      */
     suspend fun postTreasuryTransfer(
         sourceTreasuryId: String,
@@ -708,8 +817,19 @@ class LedgerWriter(
         validatePeriodIsOpen(dateEpochDay)
         validateExchangeRateGuardrail(sourceCurrency, sourceRate)
         validateExchangeRateGuardrail(destCurrency, destRate)
+
+        require(sourceCurrency == destCurrency) {
+            "Treasury transfer only supports single-currency transfers between accounts of the same currency. Use CURRENCY_EXCHANGE for cross-currency transfers."
+        }
+        require(sourceAmountOrigMinor == destAmountOrigMinor) {
+            "Single-currency transfer amounts must be equal"
+        }
+
         val sourceTreasury = db.treasuryDao().getTreasuryById(sourceTreasuryId) ?: error("Source treasury not found")
         val destTreasury = db.treasuryDao().getTreasuryById(destTreasuryId) ?: error("Dest treasury not found")
+
+        // Zero-overdraft invariant check prior to allocating sequence number
+        validateTreasuryDisbursement(sourceTreasuryId, sourceAmountOrigMinor)
 
         val docNumber = allocateNextDocNumber(DocumentType.TREASURY_TRANSFER.name, fiscalYear)
         val docId = UuidUtils.newTimeOrderedId()
@@ -750,6 +870,115 @@ class LedgerWriter(
         persistJournalDraft(docId, docNumber, draft)
 
         recordAuditLog("DOCUMENT", docId, "POST_TREASURY_TRANSFER", null, "Posted Treasury Transfer #$docNumber")
+        if (enableInvariantValidation) invariants.verifyAll()
+        docEntity
+    }
+
+    /**
+     * Posts a Currency Exchange document (CURRENCY_EXCHANGE) (B.3):
+     * Source Treasury paid exact amount -> Destination Treasury received exact amount.
+     * Exchange rate is derived: (sourceMinor / destMinor), never manually entered.
+     * DR Dest Treasury (Original = Received, Base YER = Source Base YER)
+     * CR Source Treasury (Original = Paid, Base YER = Source Base YER)
+     * Zero FX gain/loss at exchange time.
+     */
+    suspend fun postCurrencyExchange(
+        sourceTreasuryId: String,
+        sourceAmountOrigMinor: Long,
+        destTreasuryId: String,
+        destAmountOrigMinor: Long,
+        fiscalYear: Int,
+        dateEpochDay: Long,
+        notes: String = "",
+        rateZone: RateZone = RateZone.DEFAULT,
+        rateSource: RateSource = RateSource.SYSTEM_DAILY,
+        idempotencyKey: String? = null
+    ): DocumentEntity = db.withTransaction {
+        idempotencyKey?.let { key ->
+            val existingDocId = db.idempotencyDao().getDocIdForKey(key)
+            if (existingDocId != null) {
+                return@withTransaction db.documentDao().getDocumentById(existingDocId)!!
+            }
+        }
+
+        validatePeriodIsOpen(dateEpochDay)
+        require(sourceAmountOrigMinor > 0L) { "Source amount must be positive" }
+        require(destAmountOrigMinor > 0L) { "Destination amount must be positive" }
+        require(sourceTreasuryId != destTreasuryId) { "Source and destination treasuries must be different" }
+
+        val sourceTreasury = db.treasuryDao().getTreasuryById(sourceTreasuryId)
+            ?: error("Source treasury $sourceTreasuryId not found")
+        val destTreasury = db.treasuryDao().getTreasuryById(destTreasuryId)
+            ?: error("Dest treasury $destTreasuryId not found")
+
+        val sourceCurrency = CurrencyCode.fromString(sourceTreasury.currency)
+        val destCurrency = CurrencyCode.fromString(destTreasury.currency)
+        require(sourceCurrency != destCurrency) {
+            "Currency exchange must be between different currencies. Use TREASURY_TRANSFER for same-currency transfers."
+        }
+
+        // Zero-overdraft invariant check on source treasury prior to allocating sequence number
+        validateTreasuryDisbursement(sourceTreasuryId, sourceAmountOrigMinor)
+
+        // Calculate Source Base YER
+        val sourceBaseMinor: Long = when {
+            sourceCurrency == CurrencyCode.FUNCTIONAL -> sourceAmountOrigMinor
+            destCurrency == CurrencyCode.FUNCTIONAL -> destAmountOrigMinor
+            else -> {
+                // Both are foreign currencies: resolve source rate to base YER
+                val rateEntity = db.currencyRateDao().getLatestRate(sourceCurrency.name, rateZone.name, dateEpochDay)
+                    ?: throw MissingExchangeRateException(sourceCurrency, rateZone, dateEpochDay)
+                val rate = ExchangeRate(sourceCurrency, CurrencyCode.FUNCTIONAL, rateEntity.rateMicros)
+                rate.convert(sourceAmountOrigMinor)
+            }
+        }
+
+        // Derived exchange rate (sourceMinor / destMinor) scaled to micros
+        val derivedRateMicros: Long = if (destAmountOrigMinor > 0L) {
+            (sourceAmountOrigMinor * ExchangeRate.SCALE_MICROS) / destAmountOrigMinor
+        } else {
+            ExchangeRate.SCALE_MICROS
+        }
+
+        val docNumber = allocateNextDocNumber(DocumentType.CURRENCY_EXCHANGE.name, fiscalYear)
+        val docId = UuidUtils.newTimeOrderedId()
+
+        val docEntity = DocumentEntity(
+            id = docId,
+            type = DocumentType.CURRENCY_EXCHANGE.name,
+            fiscalYear = fiscalYear,
+            docNumber = docNumber,
+            partyId = AppDatabase.WALK_IN_CASH_PARTY_ID,
+            dateEpochDay = dateEpochDay,
+            currency = sourceCurrency.name,
+            exchangeRateMicros = derivedRateMicros,
+            rateZone = rateZone.name,
+            rateSource = rateSource.name,
+            totalMinor = sourceAmountOrigMinor,
+            totalBaseMinor = sourceBaseMinor,
+            status = DocumentStatus.POSTED.name,
+            notes = notes
+        )
+        db.documentDao().insertDocument(docEntity)
+
+        val draft = PostingRules.createCurrencyExchangeDraft(
+            sourceTreasuryGlCode = sourceTreasury.glAccountCode,
+            sourceTreasuryId = sourceTreasuryId,
+            sourceAmountOrigMinor = sourceAmountOrigMinor,
+            sourceCurrency = sourceCurrency,
+            destTreasuryGlCode = destTreasury.glAccountCode,
+            destTreasuryId = destTreasuryId,
+            destAmountOrigMinor = destAmountOrigMinor,
+            destCurrency = destCurrency,
+            sourceBaseMinor = sourceBaseMinor,
+            dateEpochDay = dateEpochDay,
+            memo = if (notes.isNotBlank()) notes else "مصارفة عملات #$docNumber"
+        )
+        persistJournalDraft(docId, docNumber, draft)
+
+        recordAuditLog("DOCUMENT", docId, "POST_CURRENCY_EXCHANGE", null, "Posted Currency Exchange #$docNumber")
+        idempotencyKey?.let { db.idempotencyDao().insertKey(IdempotencyKeyEntity(it, docId)) }
+
         if (enableInvariantValidation) invariants.verifyAll()
         docEntity
     }
@@ -1539,6 +1768,11 @@ enum class PaymentVoucherType {
     DIRECT_ISP_SERVICE,
     OPERATING_EXPENSE,
     PARTNER_DRAWINGS
+}
+
+enum class PaymentSource {
+    TREASURY,
+    PARTNER_PERSONAL
 }
 
 data class QuickSaleResult(

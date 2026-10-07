@@ -7,6 +7,7 @@ enum class DocumentType(val codePrefix: String, val arabicName: String) {
     PURCHASE_INVOICE("PINV", "فاتورة مشتريات"),
     PAYMENT_VOUCHER("PAY", "سند صرف"),
     TREASURY_TRANSFER("TRF", "تحويل صناديق"),
+    CURRENCY_EXCHANGE("EXC", "مصارفة عملات"),
     DEPRECIATION_RUN("DEP", "قيد إهلاك"),
     OPENING_BALANCE("OPN", "رصيد افتتاحي"),
     DIVIDEND_DISTRIBUTION("DIV", "توزيع أرباح"),

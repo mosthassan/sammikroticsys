@@ -50,7 +50,8 @@ data class TreasuryAccountEntity(
     val name: String,
     val glAccountCode: String, // 1101 or 1102
     val currency: String, // YER, USD, SAR
-    val isActive: Boolean = true
+    val isActive: Boolean = true,
+    val allowNegative: Boolean = false
 )
 
 @Entity(

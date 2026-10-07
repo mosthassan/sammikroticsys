@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.core.ledger.AccountConstants
 import com.example.data.local.dao.AccountDao
@@ -63,7 +64,7 @@ import kotlinx.coroutines.launch
         AuditLogEntity::class,
         IdempotencyKeyEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -87,6 +88,12 @@ abstract class AppDatabase : RoomDatabase() {
         const val DATABASE_NAME = "sammikrotik_accounting.db"
         const val WALK_IN_CASH_PARTY_ID = "WALK_IN_CASH"
 
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE treasury_accounts ADD COLUMN allowNegative INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
@@ -102,6 +109,7 @@ abstract class AppDatabase : RoomDatabase() {
                 AppDatabase::class.java,
                 DATABASE_NAME
             )
+                .addMigrations(MIGRATION_1_2)
                 .addCallback(DatabaseCallback())
                 // Destructive migration is strictly forbidden
                 .build()
@@ -112,6 +120,7 @@ abstract class AppDatabase : RoomDatabase() {
                 context.applicationContext,
                 AppDatabase::class.java
             )
+                .addMigrations(MIGRATION_1_2)
                 .addCallback(DatabaseCallback())
                 .allowMainThreadQueries()
                 .build()
@@ -217,16 +226,16 @@ abstract class AppDatabase : RoomDatabase() {
 
             // Seed Standard Treasuries
             db.execSQL("""
-                INSERT OR IGNORE INTO treasury_accounts (id, name, glAccountCode, currency, isActive)
-                VALUES ('TR_MAIN_YER', 'صندوق النقدية الرئيسي (YER)', '1101', 'YER', 1)
+                INSERT OR IGNORE INTO treasury_accounts (id, name, glAccountCode, currency, isActive, allowNegative)
+                VALUES ('TR_MAIN_YER', 'صندوق النقدية الرئيسي (YER)', '1101', 'YER', 1, 0)
             """)
             db.execSQL("""
-                INSERT OR IGNORE INTO treasury_accounts (id, name, glAccountCode, currency, isActive)
-                VALUES ('TR_USD_VAULT', 'خزينة الدولار (USD)', '1101', 'USD', 1)
+                INSERT OR IGNORE INTO treasury_accounts (id, name, glAccountCode, currency, isActive, allowNegative)
+                VALUES ('TR_USD_VAULT', 'خزينة الدولار (USD)', '1101', 'USD', 1, 0)
             """)
             db.execSQL("""
-                INSERT OR IGNORE INTO treasury_accounts (id, name, glAccountCode, currency, isActive)
-                VALUES ('TR_SAR_VAULT', 'خزينة الريال السعودي (SAR)', '1101', 'SAR', 1)
+                INSERT OR IGNORE INTO treasury_accounts (id, name, glAccountCode, currency, isActive, allowNegative)
+                VALUES ('TR_SAR_VAULT', 'خزينة الريال السعودي (SAR)', '1101', 'SAR', 1, 0)
             """)
 
             // Seed Exchange Rates (Sana'a & Aden zones)

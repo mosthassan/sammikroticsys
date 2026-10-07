@@ -256,7 +256,7 @@ class AuditDefectsFixIntegrationTest {
 
         // Restore into new database
         val restoreResult = newRestore.restoreDatabaseFromJson(exportedJson)
-        assertTrue("Restore must succeed", restoreResult.isSuccess)
+        assertTrue("Restore must succeed: ${restoreResult.exceptionOrNull()?.message}\n${restoreResult.exceptionOrNull()?.stackTraceToString()}", restoreResult.isSuccess)
 
         // Assert party restored with exact single quotes intact
         val restoredParty = newDb.partyDao().getPartyById(partyId)

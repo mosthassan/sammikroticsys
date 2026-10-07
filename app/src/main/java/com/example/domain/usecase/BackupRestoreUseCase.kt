@@ -57,6 +57,7 @@ class BackupRestoreUseCase(private val db: AppDatabase) {
             obj.put("glAccountCode", tr.glAccountCode)
             obj.put("currency", tr.currency)
             obj.put("isActive", tr.isActive)
+            obj.put("allowNegative", tr.allowNegative)
             treasuriesArr.put(obj)
         }
         root.put("treasuries", treasuriesArr)
@@ -333,8 +334,8 @@ class BackupRestoreUseCase(private val db: AppDatabase) {
             val treasuriesArr = root.optJSONArray("treasuries") ?: JSONArray()
             val trStmt = sdb.compileStatement("""
                 INSERT OR REPLACE INTO treasury_accounts 
-                (id, name, glAccountCode, currency, isActive)
-                VALUES (?, ?, ?, ?, ?)
+                (id, name, glAccountCode, currency, isActive, allowNegative)
+                VALUES (?, ?, ?, ?, ?, ?)
             """.trimIndent())
             for (i in 0 until treasuriesArr.length()) {
                 val tr = treasuriesArr.getJSONObject(i)
@@ -344,6 +345,7 @@ class BackupRestoreUseCase(private val db: AppDatabase) {
                 trStmt.bindString(3, tr.getString("glAccountCode"))
                 trStmt.bindString(4, tr.getString("currency"))
                 trStmt.bindLong(5, if (tr.optBoolean("isActive", true)) 1L else 0L)
+                trStmt.bindLong(6, if (tr.optBoolean("allowNegative", false)) 1L else 0L)
                 trStmt.executeInsert()
             }
             trStmt.close()
