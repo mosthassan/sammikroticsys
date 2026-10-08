@@ -109,6 +109,13 @@ fun NewSalesInvoiceBottomSheet(
     treasuries: List<TreasuryAccountEntity>,
     stockBalances: Map<String, Int>,
     partyBalances: Map<String, Long>,
+    initialPartyId: String? = null,
+    initialItems: List<SalesItemDraftState>? = null,
+    initialNotes: String? = null,
+    initialPaymentMode: String? = null,
+    initialCashPaidText: String? = null,
+    editingInvoiceDocId: String? = null,
+    isCloneMode: Boolean = false,
     onDismiss: () -> Unit,
     onSubmit: (partyId: String, items: List<SalesItemSpec>, cashPaidMinor: Long, treasuryId: String, notes: String) -> Unit
 ) {
@@ -116,26 +123,32 @@ fun NewSalesInvoiceBottomSheet(
 
     var partySearchQuery by rememberSaveable { mutableStateOf("") }
     var selectedPartyId by rememberSaveable {
-        mutableStateOf(parties.firstOrNull()?.id ?: AppDatabase.WALK_IN_CASH_PARTY_ID)
+        mutableStateOf(initialPartyId ?: parties.firstOrNull()?.id ?: AppDatabase.WALK_IN_CASH_PARTY_ID)
     }
-    var paymentMode by rememberSaveable { mutableStateOf("CREDIT") } // CASH, CREDIT, PARTIAL
-    var cashAdvanceText by rememberSaveable { mutableStateOf("") }
+    var paymentMode by rememberSaveable { mutableStateOf(initialPaymentMode ?: "CREDIT") } // CASH, CREDIT, PARTIAL
+    var cashAdvanceText by rememberSaveable { mutableStateOf(initialCashPaidText ?: "") }
     var selectedTreasuryId by rememberSaveable {
         mutableStateOf(treasuries.firstOrNull()?.id ?: "TR_MAIN_YER")
     }
-    var invoiceNotes by rememberSaveable { mutableStateOf("") }
+    var invoiceNotes by rememberSaveable { mutableStateOf(initialNotes ?: "") }
 
     // Multi-item Draft List
     val initialPkg = packages.firstOrNull()
     val itemDrafts = remember {
-        mutableStateListOf(
-            SalesItemDraftState(
-                selectedPackageId = initialPkg?.id ?: "",
-                description = initialPkg?.name ?: "كروت إنترنت",
-                quantityText = "50",
-                unitPriceText = initialPkg?.let { (it.wholesalePriceMinor / 100L).toString() } ?: "3700"
-            )
-        )
+        mutableStateListOf<SalesItemDraftState>().apply {
+            if (!initialItems.isNullOrEmpty()) {
+                addAll(initialItems)
+            } else {
+                add(
+                    SalesItemDraftState(
+                        selectedPackageId = initialPkg?.id ?: "",
+                        description = initialPkg?.name ?: "كروت إنترنت",
+                        quantityText = "50",
+                        unitPriceText = initialPkg?.let { (it.wholesalePriceMinor / 100L).toString() } ?: "3700"
+                    )
+                )
+            }
+        }
     }
 
     val selectedParty = parties.firstOrNull { it.id == selectedPartyId }
@@ -185,13 +198,17 @@ fun NewSalesInvoiceBottomSheet(
 
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        text = "فاتورة مبيعات كروت جديدة",
+                        text = when {
+                            isCloneMode -> "استنساخ فاتورة كروت إلى مسودة جديدة"
+                            editingInvoiceDocId != null -> "تعديل فاتورة مبيعات كروت"
+                            else -> "فاتورة مبيعات كروت جديدة"
+                        },
                         fontWeight = FontWeight.Black,
                         fontSize = 16.sp,
                         color = TextPrimaryDark
                     )
                     Text(
-                        text = "خصم تلقائي من المخزن وتوثيق محاسبي مزدوج",
+                        text = if (isCloneMode) "تم استنساخ البنود والكميات - يمكنك التعديل قبل الحفظ" else "خصم تلقائي من المخزن وتوثيق محاسبي مزدوج",
                         fontSize = 11.sp,
                         color = MikroTikCyan
                     )

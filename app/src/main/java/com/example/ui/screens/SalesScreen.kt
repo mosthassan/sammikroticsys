@@ -404,95 +404,96 @@ fun SalesScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // 3. Top Metrics Summary Bar (Matching Screen 3)
-            Card(
-                colors = CardDefaults.cardColors(containerColor = CyberDarkSurface),
-                shape = RoundedCornerShape(14.dp),
-                border = BorderStroke(1.dp, CyberBorder),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+            // 3. Top Metrics Summary Bar for Tabs 0 & 2
+            if (activeTab != 1) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = CyberDarkSurface),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, CyberBorder),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    // Total Sales
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.CreditCard, contentDescription = null, tint = MikroTikCyan, modifier = Modifier.size(12.dp))
-                            Spacer(modifier = Modifier.width(2.dp))
-                            Text("المبيعات:", fontSize = 10.sp, color = TextSecondaryDark)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Total Sales
+                        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.CreditCard, contentDescription = null, tint = MikroTikCyan, modifier = Modifier.size(12.dp))
+                                Spacer(modifier = Modifier.width(2.dp))
+                                Text("المبيعات:", fontSize = 10.sp, color = TextSecondaryDark)
+                            }
+                            Text(
+                                text = "${totalSalesAmountMinor / 100L} ر.ي",
+                                color = MikroTikCyan,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
-                        Text(
-                            text = "${totalSalesAmountMinor / 100L} ر.ي",
-                            color = MikroTikCyan,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
 
-                    // Collected
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Payments, contentDescription = null, tint = StatusOnline, modifier = Modifier.size(12.dp))
-                            Spacer(modifier = Modifier.width(2.dp))
-                            Text("المحصل:", fontSize = 10.sp, color = TextSecondaryDark)
+                        // Collected
+                        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Payments, contentDescription = null, tint = StatusOnline, modifier = Modifier.size(12.dp))
+                                Spacer(modifier = Modifier.width(2.dp))
+                                Text("المحصل:", fontSize = 10.sp, color = TextSecondaryDark)
+                            }
+                            Text(
+                                text = "${totalCollectedMinor / 100L} ر.ي",
+                                color = StatusOnline,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
-                        Text(
-                            text = "${totalCollectedMinor / 100L} ر.ي",
-                            color = StatusOnline,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
 
-                    // Receivables (آجل)
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Schedule, contentDescription = null, tint = PaymentRed, modifier = Modifier.size(12.dp))
-                            Spacer(modifier = Modifier.width(2.dp))
-                            Text("الآجل:", fontSize = 10.sp, color = TextSecondaryDark)
+                        // Receivables (آجل)
+                        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Schedule, contentDescription = null, tint = PaymentRed, modifier = Modifier.size(12.dp))
+                                Spacer(modifier = Modifier.width(2.dp))
+                                Text("الآجل:", fontSize = 10.sp, color = TextSecondaryDark)
+                            }
+                            Text(
+                                text = "${totalReceivablesMinor / 100L} ر.ي",
+                                color = PaymentRed,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
-                        Text(
-                            text = "${totalReceivablesMinor / 100L} ر.ي",
-                            color = PaymentRed,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
 
-                    // Total Cards Count
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(0.9f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Inventory2, contentDescription = null, tint = InvestmentGold, modifier = Modifier.size(12.dp))
-                            Spacer(modifier = Modifier.width(2.dp))
-                            Text("الكروت:", fontSize = 10.sp, color = TextSecondaryDark)
+                        // Total Cards Count
+                        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(0.9f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Inventory2, contentDescription = null, tint = InvestmentGold, modifier = Modifier.size(12.dp))
+                                Spacer(modifier = Modifier.width(2.dp))
+                                Text("الكروت:", fontSize = 10.sp, color = TextSecondaryDark)
+                            }
+                            Text(
+                                text = "$totalSoldCards كرت",
+                                color = InvestmentGold,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
-                        Text(
-                            text = "$totalSoldCards كرت",
-                            color = InvestmentGold,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
                     }
                 }
+                Spacer(modifier = Modifier.height(8.dp))
             }
-
-            Spacer(modifier = Modifier.height(8.dp))
 
             // 4. Main Body Content Based on Active Tab
             when (activeTab) {
@@ -507,26 +508,30 @@ fun SalesScreen(
                     )
                 }
                 1 -> {
-                    // Sales Invoices Tab
-                    SalesInvoicesTab(
-                        salesInvoices = filteredInvoices,
-                        allSalesInvoicesCount = allSalesInvoices.size,
-                        unpaidCount = unpaidCount,
-                        paidCount = paidCount,
-                        partialCount = partialCount,
-                        partyMap = partyMap,
-                        allocationsByInvoice = allocationsByInvoice,
-                        cardCountByDocId = cardCountByDocId,
-                        searchQuery = searchQuery,
-                        statusFilter = statusFilter,
-                        onSearchChange = { searchQuery = it },
-                        onFilterChange = { statusFilter = it },
-                        onNewInvoiceClick = { showNewInvoiceSheet = true },
-                        onInvoiceClick = { inv ->
-                            selectedInvoiceForDetail = inv
-                            viewModel.getDocumentItems(inv.id) { items ->
-                                invoiceItemsForDetail = items
-                            }
+                    // Enterprise Sales Invoices Screen Content
+                    SalesInvoicesContent(
+                        documents = documents,
+                        allocations = allocations,
+                        parties = parties,
+                        packages = packages,
+                        treasuries = treasuries,
+                        stockMovements = stockMovements,
+                        partyBalances = partyBalances,
+                        onVoidInvoice = { docId, reason, onDone ->
+                            viewModel.voidDocument(docId, reason, onDone)
+                        },
+                        onPostInvoice = { partyId, items, cashPaid, treasuryId, notes, onDone ->
+                            viewModel.postSalesInvoiceWithSettlement(
+                                partyId = partyId,
+                                cardItems = items,
+                                cashPaidMinor = cashPaid,
+                                treasuryId = treasuryId,
+                                notes = notes,
+                                onSuccess = onDone
+                            )
+                        },
+                        fetchDocumentItems = { docId, callback ->
+                            viewModel.getDocumentItems(docId, callback)
                         }
                     )
                 }

@@ -81,7 +81,10 @@ import com.example.ui.theme.SemanticIncomeGreen
 import com.example.ui.theme.TextMutedDark
 import com.example.ui.theme.TextPrimaryDark
 import com.example.ui.theme.TextSecondaryDark
+import com.example.util.PdfDocumentGenerator
 import com.example.util.WhatsAppDispatcher
+import java.io.File
+import androidx.compose.material.icons.filled.PictureAsPdf
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -93,6 +96,7 @@ fun PartyLedgerScreen(
 ) {
     val context = LocalContext.current
     var showEditDialog by remember { mutableStateOf(false) }
+    var previewPdfFile by remember { mutableStateOf<File?>(null) }
 
     Scaffold(
         topBar = {
@@ -138,7 +142,16 @@ fun PartyLedgerScreen(
             report = report,
             context = context,
             onOpenEdit = { showEditDialog = true },
+            onOpenPdf = { previewPdfFile = it },
             modifier = Modifier.padding(innerPadding)
+        )
+    }
+
+    previewPdfFile?.let { pdfFile ->
+        PdfPreviewDialog(
+            pdfFile = pdfFile,
+            title = "كشف حساب ${party.name}",
+            onDismiss = { previewPdfFile = null }
         )
     }
 
@@ -172,6 +185,7 @@ fun PartyLedgerDialog(
 ) {
     val context = LocalContext.current
     var showEditDialog by remember { mutableStateOf(false) }
+    var previewPdfFile by remember { mutableStateOf<File?>(null) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -245,10 +259,19 @@ fun PartyLedgerDialog(
                     report = report,
                     context = context,
                     onOpenEdit = { showEditDialog = true },
+                    onOpenPdf = { previewPdfFile = it },
                     modifier = Modifier.weight(1f)
                 )
             }
         }
+    }
+
+    previewPdfFile?.let { pdfFile ->
+        PdfPreviewDialog(
+            pdfFile = pdfFile,
+            title = "كشف حساب ${party.name}",
+            onDismiss = { previewPdfFile = null }
+        )
     }
 
     if (showEditDialog && onEditParty != null) {
@@ -278,6 +301,7 @@ private fun PartyLedgerBody(
     report: StatementOfAccountReport?,
     context: Context,
     onOpenEdit: () -> Unit,
+    onOpenPdf: (File) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val curr = CurrencyCode.FUNCTIONAL
@@ -452,34 +476,67 @@ private fun PartyLedgerBody(
                 }
             }
 
-            // Direct WhatsApp Statement Dispatch Button
-            Button(
-                onClick = {
-                    val openingStr = Money(rep.openingBalanceMinor, curr).format()
-                    val closingStr = Money(rep.closingBalanceMinor, curr).format()
-                    WhatsAppDispatcher.dispatchStatementSummary(
-                        context = context,
-                        party = party,
-                        openingBalanceText = openingStr,
-                        closingBalanceText = closingStr,
-                        transactionCount = rep.items.size
-                    )
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF25D366)),
-                shape = RoundedCornerShape(10.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(42.dp)
-                    .testTag("btn_dispatch_statement_whatsapp")
+            // Action Buttons: PDF Statement & WhatsApp Statement Dispatch
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(Icons.Default.Send, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "إرسال كشف الحساب كاملاً عبر واتساب",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp,
-                    color = Color.Black
-                )
+                // Branded PDF Statement Button
+                Button(
+                    onClick = {
+                        val pdfFile = PdfDocumentGenerator.generateAgentStatementPdf(
+                            context = context,
+                            report = rep,
+                            party = party
+                        )
+                        onOpenPdf(pdfFile)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(42.dp)
+                        .testTag("btn_generate_pdf_statement")
+                ) {
+                    Icon(Icons.Default.PictureAsPdf, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "كشف حساب PDF",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp,
+                        color = Color.White
+                    )
+                }
+
+                // Direct WhatsApp Statement Dispatch Button
+                Button(
+                    onClick = {
+                        val openingStr = Money(rep.openingBalanceMinor, curr).format()
+                        val closingStr = Money(rep.closingBalanceMinor, curr).format()
+                        WhatsAppDispatcher.dispatchStatementSummary(
+                            context = context,
+                            party = party,
+                            openingBalanceText = openingStr,
+                            closingBalanceText = closingStr,
+                            transactionCount = rep.items.size
+                        )
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF25D366)),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                        .weight(1.3f)
+                        .height(42.dp)
+                        .testTag("btn_dispatch_statement_whatsapp")
+                ) {
+                    Icon(Icons.Default.Send, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "إرسال عبر واتساب",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp,
+                        color = Color.Black
+                    )
+                }
             }
         }
 
