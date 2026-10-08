@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.PlayArrow
@@ -41,7 +42,10 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
@@ -82,6 +86,7 @@ import com.example.core.model.RateZone
 import com.example.data.ledger.PurchaseItemSpec
 import com.example.data.local.AppDatabase
 import com.example.data.local.entity.AssetEntity
+import com.example.data.local.entity.CardPackageEntity
 import com.example.data.local.entity.DocumentEntity
 import com.example.data.local.entity.DocumentItemEntity
 import com.example.ui.components.AmountSemanticType
@@ -118,6 +123,7 @@ fun PurchasesAssetsScreen(
     val assets by viewModel.allAssets.collectAsState()
     val parties by viewModel.allParties.collectAsState()
     val treasuries by viewModel.allTreasuries.collectAsState()
+    val packages by viewModel.allPackages.collectAsState()
 
     var selectedTab by remember { mutableIntStateOf(0) } // 0: Purchases, 1: Fixed Assets Register
     var showNewPurchaseSheet by remember { mutableStateOf(false) }
@@ -372,6 +378,7 @@ fun PurchasesAssetsScreen(
     if (showNewPurchaseSheet) {
         NewPurchaseBottomSheet(
             parties = parties,
+            packages = packages,
             resolver = viewModel.exchangeRateResolver,
             onDismiss = { showNewPurchaseSheet = false },
             onSubmit = { vendorId, currency, rate, items, notes ->
@@ -688,6 +695,7 @@ fun PurchasesAssetsScreen(
 @Composable
 fun NewPurchaseBottomSheet(
     parties: List<com.example.data.local.entity.PartyEntity>,
+    packages: List<CardPackageEntity> = emptyList(),
     resolver: ExchangeRateResolver? = null,
     onDismiss: () -> Unit,
     onSubmit: (vendorId: String, currency: CurrencyCode, rate: ExchangeRate, items: List<PurchaseItemSpec>, notes: String) -> Unit
@@ -723,13 +731,16 @@ fun NewPurchaseBottomSheet(
 
     val effectiveRate = manualRateOverride ?: resolvedRate
 
-    // New item inputs
+    // New item inputs & package dropdown state
     var itemDesc by rememberSaveable { mutableStateOf("") }
     var itemQtyText by rememberSaveable { mutableStateOf("1") }
     var itemPriceText by rememberSaveable { mutableStateOf("100") }
     var isFixedAsset by rememberSaveable { mutableStateOf(true) }
     var usefulMonthsText by rememberSaveable { mutableStateOf("24") }
     var notes by rememberSaveable { mutableStateOf("") }
+    var packageDropdownExpanded by remember { mutableStateOf(false) }
+    var selectedPackage by remember { mutableStateOf<CardPackageEntity?>(null) }
+    var selectedPackageId by rememberSaveable { mutableStateOf("") }
 
     val itemsList = remember { androidx.compose.runtime.mutableStateListOf<PurchaseItemSpec>() }
     val scrollState = rememberScrollState()
@@ -993,6 +1004,8 @@ fun NewPurchaseBottomSheet(
                                     shape = RoundedCornerShape(8.dp),
                                     border = BorderStroke(1.dp, CyberBorder),
                                     modifier = Modifier.clickable {
+                                        selectedPackage = null
+                                        selectedPackageId = ""
                                         itemDesc = sugg
                                         isFixedAsset = sugg.contains("راوتر") || sugg.contains("سويتش") || sugg.contains("أنتينا") || sugg.contains("بطارية")
                                     }
@@ -1007,13 +1020,140 @@ fun NewPurchaseBottomSheet(
                             }
                         }
 
-                        OutlinedTextField(
-                            value = itemDesc,
-                            onValueChange = { itemDesc = it },
-                            label = { Text("اسم الجهاز أو الصنف (مثال: راوتر CCR2004)") },
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth().testTag("input_item_desc")
-                        )
+                        // Package & Item Selection Dropdown
+                        ExposedDropdownMenuBox(
+                            expanded = packageDropdownExpanded,
+                            onExpandedChange = { packageDropdownExpanded = it },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("dropdown_package_selector")
+                        ) {
+                            OutlinedTextField(
+                                value = selectedPackage?.name ?: itemDesc,
+                                onValueChange = { newText ->
+                                    itemDesc = newText
+                                    if (selectedPackage?.name != newText) {
+                                        selectedPackage = null
+                                        selectedPackageId = ""
+                                    }
+                                },
+                                label = { Text("الصنف / الباقة (اختر من القائمة أو اكتب يدوياً)") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = packageDropdownExpanded) },
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .menuAnchor()
+                                    .fillMaxWidth()
+                                    .testTag("input_item_desc")
+                            )
+
+                            ExposedDropdownMenu(
+                                expanded = packageDropdownExpanded,
+                                onDismissRequest = { packageDropdownExpanded = false }
+                            ) {
+                                if (packages.isNotEmpty()) {
+                                    Text(
+                                        text = "فئات وباقات الكروت الذكية (مخزون)",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MikroTikCyan,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                                    )
+                                    packages.forEach { pkg ->
+                                        val isSelected = selectedPackageId == pkg.id || selectedPackage?.id == pkg.id
+                                        DropdownMenuItem(
+                                            text = {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Column {
+                                                        Text(
+                                                            text = pkg.name,
+                                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                            color = if (isSelected) MikroTikCyan else TextPrimaryDark
+                                                        )
+                                                        Text(
+                                                            text = "سعر التكلفة/الجملة: ${pkg.wholesalePriceMinor / 100L} ${selectedCurrency.name}",
+                                                            fontSize = 11.sp,
+                                                            color = TextSecondaryDark
+                                                        )
+                                                    }
+                                                    if (isSelected) {
+                                                        Icon(
+                                                            Icons.Default.Check,
+                                                            contentDescription = null,
+                                                            tint = MikroTikCyan,
+                                                            modifier = Modifier.size(18.dp)
+                                                        )
+                                                    }
+                                                }
+                                            },
+                                            onClick = {
+                                                selectedPackage = pkg
+                                                selectedPackageId = pkg.id
+                                                itemDesc = pkg.name
+                                                if (pkg.wholesalePriceMinor > 0L) {
+                                                    itemPriceText = (pkg.wholesalePriceMinor / 100L).toString()
+                                                }
+                                                isFixedAsset = false
+                                                packageDropdownExpanded = false
+                                            },
+                                            modifier = Modifier.testTag("dropdown_pkg_${pkg.id}")
+                                        )
+                                    }
+                                    HorizontalDivider(color = CyberBorder, modifier = Modifier.padding(vertical = 4.dp))
+                                }
+
+                                Text(
+                                    text = "أجهزة ومعدات شبكة مقترحة (أصول / مصروفات)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = AssetPurple,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                                )
+                                val suggestedEquipment = listOf(
+                                    Triple("راوتر MikroTik CCR", "250", true),
+                                    Triple("سويتش Gigabit 24-Port", "120", true),
+                                    Triple("أنتينا Sector 5GHz", "90", true),
+                                    Triple("كيبل إيثرنت Cat6 رول", "60", false),
+                                    Triple("محول طاقة PoE 24V", "15", false),
+                                    Triple("بطارية جيل 150Ah", "180", true)
+                                )
+                                suggestedEquipment.forEach { (equipName, defaultPrice, isAsset) ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Column {
+                                                    Text(
+                                                        text = equipName,
+                                                        fontWeight = FontWeight.Medium,
+                                                        color = TextPrimaryDark
+                                                    )
+                                                    Text(
+                                                        text = if (isAsset) "أصل شبكة رأسمالي ($defaultPrice ${selectedCurrency.name})" else "مستهلكات شبكة ($defaultPrice ${selectedCurrency.name})",
+                                                        fontSize = 11.sp,
+                                                        color = TextSecondaryDark
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        onClick = {
+                                            selectedPackage = null
+                                            selectedPackageId = ""
+                                            itemDesc = equipName
+                                            itemPriceText = defaultPrice
+                                            isFixedAsset = isAsset
+                                            packageDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
 
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1115,11 +1255,14 @@ fun NewPurchaseBottomSheet(
                                 val p = Money.parseFromUserInput(itemPriceText, selectedCurrency)?.minor ?: 0L
                                 val m = usefulMonthsText.toIntOrNull() ?: 24
                                 val code = if (isFixedAsset) AccountConstants.FIXED_ASSETS_NETWORK else AccountConstants.OPERATING_EXPENSES
-                                itemsList.add(PurchaseItemSpec(itemDesc.ifBlank { "معدات شبكة" }, code, q, p, isFixedAsset, m))
+                                val descToUse = selectedPackage?.name ?: itemDesc.ifBlank { "معدات شبكة" }
+                                itemsList.add(PurchaseItemSpec(descToUse, code, q, p, isFixedAsset, m))
+                                selectedPackage = null
+                                selectedPackageId = ""
                                 itemDesc = ""
                                 itemQtyText = "1"
                             },
-                            enabled = itemDesc.isNotBlank() || itemsList.isEmpty(),
+                            enabled = selectedPackage != null || itemDesc.isNotBlank() || itemsList.isEmpty(),
                             colors = ButtonDefaults.buttonColors(containerColor = MikroTikPrimary),
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.fillMaxWidth().testTag("btn_add_purchase_item_row")

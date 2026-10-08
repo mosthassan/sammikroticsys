@@ -12,6 +12,9 @@ import com.example.domain.usecase.StatementItem
 import com.example.domain.usecase.StatementOfAccountReport
 import com.example.ui.screens.SalesItemDraftState
 import com.example.util.PdfDocumentGenerator
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.pdf.PdfDocument
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -20,11 +23,43 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
 import java.io.File
 import java.io.FileInputStream
+import java.io.OutputStream
+
+@Implements(PdfDocument::class)
+class ShadowPdfDocument {
+    @Implementation
+    fun startPage(pageInfo: PdfDocument.PageInfo): PdfDocument.Page {
+        val bitmap = Bitmap.createBitmap(pageInfo.pageWidth, pageInfo.pageHeight, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val constructor = PdfDocument.Page::class.java.getDeclaredConstructor(
+            Canvas::class.java,
+            PdfDocument.PageInfo::class.java
+        )
+        constructor.isAccessible = true
+        return constructor.newInstance(canvas, pageInfo)
+    }
+
+    @Implementation
+    fun finishPage(page: PdfDocument.Page) {
+    }
+
+    @Implementation
+    fun writeTo(out: OutputStream) {
+        out.write("%PDF-1.4\n".toByteArray(Charsets.UTF_8))
+        out.flush()
+    }
+
+    @Implementation
+    fun close() {
+    }
+}
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], shadows = [ShadowPdfDocument::class])
 class SalesInvoicesAndPdfStatementTest {
 
     private lateinit var context: Context

@@ -555,7 +555,85 @@ fun NewSalesInvoiceBottomSheet(
                                 }
                             }
 
-                            // Dynamic Package Selector
+                            var pkgDropdownExpanded by remember { mutableStateOf(false) }
+
+                            // Dynamic Package Selector Dropdown
+                            ExposedDropdownMenuBox(
+                                expanded = pkgDropdownExpanded,
+                                onExpandedChange = { pkgDropdownExpanded = it },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("dropdown_package_selector_$index")
+                            ) {
+                                OutlinedTextField(
+                                    value = selectedPkg?.name ?: item.description,
+                                    onValueChange = { newDesc ->
+                                        itemDrafts[index] = item.copy(description = newDesc)
+                                    },
+                                    label = { Text("فئة الكرت / الباقة") },
+                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = pkgDropdownExpanded) },
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = MikroTikCyan,
+                                        unfocusedBorderColor = CyberBorder,
+                                        focusedTextColor = TextPrimaryDark,
+                                        unfocusedTextColor = TextPrimaryDark
+                                    ),
+                                    modifier = Modifier
+                                        .menuAnchor()
+                                        .fillMaxWidth()
+                                        .testTag("input_package_field_$index")
+                                )
+                                ExposedDropdownMenu(
+                                    expanded = pkgDropdownExpanded,
+                                    onDismissRequest = { pkgDropdownExpanded = false }
+                                ) {
+                                    packages.forEach { pkg ->
+                                        val isPkgSelected = pkg.id == item.selectedPackageId
+                                        DropdownMenuItem(
+                                            text = {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Column {
+                                                        Text(
+                                                            pkg.name,
+                                                            fontWeight = if (isPkgSelected) FontWeight.Bold else FontWeight.Medium,
+                                                            color = if (isPkgSelected) MikroTikCyan else TextPrimaryDark
+                                                        )
+                                                        Text(
+                                                            "سعر الجملة: ${pkg.wholesalePriceMinor / 100L} ر.ي",
+                                                            fontSize = 11.sp,
+                                                            color = TextSecondaryDark
+                                                        )
+                                                    }
+                                                    if (isPkgSelected) {
+                                                        Icon(
+                                                            Icons.Default.Check,
+                                                            contentDescription = null,
+                                                            tint = MikroTikCyan,
+                                                            modifier = Modifier.size(16.dp)
+                                                        )
+                                                    }
+                                                }
+                                            },
+                                            onClick = {
+                                                itemDrafts[index] = item.copy(
+                                                    selectedPackageId = pkg.id,
+                                                    description = pkg.name,
+                                                    unitPriceText = (pkg.wholesalePriceMinor / 100L).toString()
+                                                )
+                                                pkgDropdownExpanded = false
+                                            },
+                                            modifier = Modifier.testTag("dropdown_item_${pkg.id}_$index")
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Dynamic Package Quick Filter Chips
                             LazyRow(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 modifier = Modifier.fillMaxWidth()
@@ -567,9 +645,11 @@ fun NewSalesInvoiceBottomSheet(
                                         shape = RoundedCornerShape(8.dp),
                                         border = BorderStroke(1.dp, if (isSelected) MikroTikCyan else CyberBorder),
                                         modifier = Modifier.clickable {
-                                            item.selectedPackageId = pkg.id
-                                            item.description = pkg.name
-                                            item.unitPriceText = (pkg.wholesalePriceMinor / 100L).toString()
+                                            itemDrafts[index] = item.copy(
+                                                selectedPackageId = pkg.id,
+                                                description = pkg.name,
+                                                unitPriceText = (pkg.wholesalePriceMinor / 100L).toString()
+                                            )
                                         }
                                     ) {
                                         Text(
@@ -590,7 +670,9 @@ fun NewSalesInvoiceBottomSheet(
                             ) {
                                 OutlinedTextField(
                                     value = item.quantityText,
-                                    onValueChange = { item.quantityText = it.filter { ch -> ch.isDigit() } },
+                                    onValueChange = { newQty ->
+                                        itemDrafts[index] = item.copy(quantityText = newQty.filter { ch -> ch.isDigit() })
+                                    },
                                     label = { Text("الكمية") },
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                     shape = RoundedCornerShape(10.dp),
@@ -603,7 +685,9 @@ fun NewSalesInvoiceBottomSheet(
 
                                 OutlinedTextField(
                                     value = item.unitPriceText,
-                                    onValueChange = { item.unitPriceText = it.filter { ch -> ch.isDigit() } },
+                                    onValueChange = { newPrice ->
+                                        itemDrafts[index] = item.copy(unitPriceText = newPrice.filter { ch -> ch.isDigit() })
+                                    },
                                     label = { Text("سعر الحبة (ر.ي)") },
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                     shape = RoundedCornerShape(10.dp),
