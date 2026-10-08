@@ -97,8 +97,10 @@ fun PartnerDetailDialog(
     onDismissRequest: () -> Unit
 ) {
     val dynamicCapitalMinor by viewModel.getPartnerCapitalBalanceFlow(partner.id).collectAsState(initial = 0L)
+    val currentAccountMinor by viewModel.getPartnerCurrentBalanceFlow(partner.id).collectAsState(initial = 0L)
     val partnerDocs by viewModel.getDocumentsByPartyFlow(partner.id).collectAsState(initial = emptyList())
     val treasuries by viewModel.allTreasuries.collectAsState(initial = emptyList())
+    val org by viewModel.organization.collectAsState(initial = null)
 
     var showNewContributionDialog by remember { mutableStateOf(false) }
     var docToVoid by remember { mutableStateOf<DocumentEntity?>(null) }
@@ -145,7 +147,8 @@ fun PartnerDetailDialog(
                                 val sharePct = partner.equityPercentageBasisPoints / 100.0
                                 if (sharePct > 0) {
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text("• نسبة الأرباح: $sharePct%", color = MikroTikCyan, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                    val modeLabel = if (org?.equityShareMode == "DERIVED_FROM_CAPITAL") "رأس المال" else "اتفاقية"
+                                    Text("• حصة الأرباح ($modeLabel): $sharePct%", color = MikroTikCyan, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                                 }
                             }
                         }
@@ -158,61 +161,84 @@ fun PartnerDetailDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Dynamic Capital Balance Hero Card
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = CyberDarkCardElevated),
-                    border = BorderStroke(1.dp, CyberBorder),
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                // Dynamic Capital and Current Account Hero Cards
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // Capital Account 3101
+                    Card(
+                        modifier = Modifier.weight(1f),
+                        colors = CardDefaults.cardColors(containerColor = CyberDarkCardElevated),
+                        border = BorderStroke(1.dp, CyberBorder),
+                        shape = RoundedCornerShape(14.dp)
                     ) {
-                        Column {
-                            Text("رأس المال المساهم به حالياً (3101)", color = TextSecondaryDark, fontSize = 12.sp)
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text("رأس المال التاريخي (3101)", color = TextSecondaryDark, fontSize = 11.sp)
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 Money(dynamicCapitalMinor, CurrencyCode.YER).format(),
                                 color = StatusOnline,
-                                fontSize = 22.sp,
+                                fontSize = 16.sp,
                                 fontWeight = FontWeight.Black
                             )
-                            Text("محسوب ديناميكياً من دفتر الأستاذ العام", color = TextMutedDark, fontSize = 10.sp)
+                            Text("مجمد بالتكلفة التاريخية (IAS 21)", color = TextMutedDark, fontSize = 9.sp)
                         }
+                    }
 
-                        Button(
-                            onClick = { showNewContributionDialog = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = MikroTikPrimary),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("سند مساهمة جديد", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    // Current Account 3201
+                    Card(
+                        modifier = Modifier.weight(1f),
+                        colors = CardDefaults.cardColors(containerColor = CyberDarkCardElevated),
+                        border = BorderStroke(1.dp, CyberBorder),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text("جاري الشريك (3201)", color = TextSecondaryDark, fontSize = 11.sp)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                Money(currentAccountMinor, CurrencyCode.YER).format(),
+                                color = if (currentAccountMinor >= 0) MikroTikCyan else SemanticExpenseRed,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Black
+                            )
+                            Text("أرباح موزعة ومسحوبات", color = TextMutedDark, fontSize = 9.sp)
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
-                Text(
-                    "سجل سندات مساهمات رأس المال (${contributionVouchers.size})",
-                    color = TextPrimaryDark,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp
-                )
-                Text(
-                    "جميع الحركات مسجلة كقيود يومية مزدوجة ومحمية من التعديل العشوائي",
-                    color = TextMutedDark,
-                    fontSize = 11.sp
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            "سجل سندات مساهمات رأس المال (${contributionVouchers.size})",
+                            color = TextPrimaryDark,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                        Text(
+                            "التاريخ • العملة الأصلية • سعر الصرف التاريخي • القيمة بالريال",
+                            color = TextMutedDark,
+                            fontSize = 10.sp
+                        )
+                    }
+
+                    Button(
+                        onClick = { showNewContributionDialog = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = MikroTikPrimary),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("مساهمة جديدة", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Vouchers Audit List
+                // Vouchers Audit List (Historical Ledger)
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -234,6 +260,7 @@ fun PartnerDetailDialog(
                         items(contributionVouchers) { doc ->
                             val isVoided = doc.status == "VOIDED"
                             val isInKind = doc.notes.contains("عينية") || doc.notes.contains("أصل")
+                            val docCurr = CurrencyCode.fromString(doc.currency)
 
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
@@ -273,7 +300,7 @@ fun PartnerDetailDialog(
                                                     fontSize = 13.sp
                                                 )
                                                 Text(
-                                                    LocalDate.ofEpochDay(doc.dateEpochDay).toString() + " • " + if (isInKind) "مساهمة عينية (أصل ثابت)" else "مساهمة نقدية",
+                                                    LocalDate.ofEpochDay(doc.dateEpochDay).toString() + " • " + if (isInKind) "مساهمة عينية (أصل)" else "مساهمة نقدية",
                                                     color = TextSecondaryDark,
                                                     fontSize = 11.sp
                                                 )
@@ -289,7 +316,7 @@ fun PartnerDetailDialog(
                                             )
                                             if (doc.currency != "YER") {
                                                 Text(
-                                                    "${doc.totalMinor / 100.0} ${doc.currency}",
+                                                    Money(doc.totalMinor, docCurr).format(),
                                                     color = TextSecondaryDark,
                                                     fontSize = 11.sp
                                                 )
@@ -297,8 +324,19 @@ fun PartnerDetailDialog(
                                         }
                                     }
 
+                                    // Display Historical Rate if Foreign Currency
+                                    if (doc.currency != "YER") {
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            "سعر الصرف التاريخي: ${ExchangeRate.formatRateMicros(doc.exchangeRateMicros)} YER (نطاق: ${doc.rateZone})",
+                                            color = MikroTikCyan,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+
                                     if (doc.notes.isNotBlank()) {
-                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Spacer(modifier = Modifier.height(4.dp))
                                         Text("البيان: ${doc.notes}", color = TextMutedDark, fontSize = 11.sp)
                                     }
 
@@ -506,15 +544,34 @@ fun NewCapitalContributionDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
+                // Currency Selector via shared component
+                Text("عملة المساهمة:", color = TextSecondaryDark, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(modifier = Modifier.height(4.dp))
+                CurrencySelector(
+                    selectedCurrency = selectedCurrency,
+                    onCurrencySelected = { c ->
+                        selectedCurrency = c
+                        val matchingTreasury = treasuries.firstOrNull { it.currency == c.name }
+                        if (matchingTreasury != null) {
+                            selectedTreasuryId = matchingTreasury.id
+                        }
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
                 if (contributionType == 0) {
-                    // Treasury Selector
+                    // Treasury Selector (filtered to match selected currency)
+                    val matchingTreasuries = treasuries.filter { it.currency == selectedCurrency.name }
+                    val effectiveTreasuries = if (matchingTreasuries.isNotEmpty()) matchingTreasuries else treasuries
+
                     ExposedDropdownMenuBox(
                         expanded = treasuryExpanded,
                         onExpandedChange = { treasuryExpanded = it },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         OutlinedTextField(
-                            value = treasuries.find { it.id == selectedTreasuryId }?.name ?: selectedTreasuryId,
+                            value = treasuries.find { it.id == selectedTreasuryId }?.let { "${it.name} (${it.currency})" } ?: selectedTreasuryId,
                             onValueChange = {},
                             readOnly = true,
                             label = { Text("إيداع إلى الخزينة / الصندوق (1101)") },
@@ -527,12 +584,11 @@ fun NewCapitalContributionDialog(
                             expanded = treasuryExpanded,
                             onDismissRequest = { treasuryExpanded = false }
                         ) {
-                            treasuries.forEach { t ->
+                            effectiveTreasuries.forEach { t ->
                                 DropdownMenuItem(
                                     text = { Text("${t.name} (${t.currency})") },
                                     onClick = {
                                         selectedTreasuryId = t.id
-                                        selectedCurrency = runCatching { CurrencyCode.valueOf(t.currency) }.getOrDefault(CurrencyCode.YER)
                                         treasuryExpanded = false
                                     }
                                 )
@@ -556,48 +612,15 @@ fun NewCapitalContributionDialog(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
-                // Currency & Amount
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ExposedDropdownMenuBox(
-                        expanded = currencyExpanded,
-                        onExpandedChange = { currencyExpanded = it },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        OutlinedTextField(
-                            value = selectedCurrency.name,
-                            onValueChange = {},
-                            readOnly = true,
-                            label = { Text("العملة") },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = currencyExpanded) },
-                            modifier = Modifier
-                                .menuAnchor()
-                                .fillMaxWidth()
-                        )
-                        ExposedDropdownMenu(
-                            expanded = currencyExpanded,
-                            onDismissRequest = { currencyExpanded = false }
-                        ) {
-                            CurrencyCode.values().forEach { c ->
-                                DropdownMenuItem(
-                                    text = { Text(c.name) },
-                                    onClick = {
-                                        selectedCurrency = c
-                                        currencyExpanded = false
-                                    }
-                                )
-                            }
-                        }
-                    }
-
-                    OutlinedTextField(
-                        value = amountText,
-                        onValueChange = { amountText = it },
-                        label = { Text(if (contributionType == 0) "المبلغ النقدي" else "القيمة التقديرية للأصل") },
-                        modifier = Modifier.weight(2f)
-                    )
-                }
+                // Amount Text Field (Reject Double Parsing!)
+                OutlinedTextField(
+                    value = amountText,
+                    onValueChange = { amountText = it },
+                    label = { Text(if (contributionType == 0) "المبلغ النقدي بالعملة (${selectedCurrency.name})" else "القيمة التقديرية للأصل (${selectedCurrency.name})") },
+                    modifier = Modifier.fillMaxWidth()
+                )
 
                 if (selectedCurrency != CurrencyCode.YER) {
                     Spacer(modifier = Modifier.height(8.dp))
@@ -611,11 +634,11 @@ fun NewCapitalContributionDialog(
                         onValueChange = {
                             exchangeRateText = it
                             val parsed = ExchangeRate.parseRateFromUserInput(it)
-                            if (parsed != null && parsed > 0L) {
-                                resolvedRate = ExchangeRate(selectedCurrency, CurrencyCode.FUNCTIONAL, parsed)
-                            }
+                            resolvedRate = if (parsed != null && parsed > 0L) {
+                                ExchangeRate(selectedCurrency, CurrencyCode.FUNCTIONAL, parsed)
+                            } else null
                         },
-                        label = { Text("سعر الصرف المعتمد مقابل الريال اليمني (YER)") },
+                        label = { Text("سعر الصرف المعتمد مقابل الريال اليمني (YER) - إجباري") },
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -631,18 +654,22 @@ fun NewCapitalContributionDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
+                // Strict Validation: Reject Double parsing, Blank rate MUST reject submission!
                 val parsedMoney = Money.parseFromUserInput(amountText, selectedCurrency)
                 val isAmountValid = (parsedMoney?.minor ?: 0L) > 0L
                 val parsedRateMicros = if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
                     ExchangeRate.SCALE_MICROS
                 } else {
-                    ExchangeRate.parseRateFromUserInput(exchangeRateText) ?: (resolvedRate?.rateMicros ?: 0L)
+                    if (exchangeRateText.isBlank()) 0L else (ExchangeRate.parseRateFromUserInput(exchangeRateText) ?: (resolvedRate?.rateMicros ?: 0L))
                 }
                 val isRateValid = parsedRateMicros > 0L
                 val isInKindValid = contributionType == 0 || assetNameText.isNotBlank()
 
                 Button(
                     onClick = {
+                        require(isAmountValid) { "المبلغ المدخل غير صالح" }
+                        require(isRateValid) { "سعر الصرف مطلوب للعملات الأجنبية ولا يمكن تركه فارغاً" }
+
                         val amtMinor = parsedMoney!!.minor
                         val rate = if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
                             ExchangeRate.parity(CurrencyCode.FUNCTIONAL)

@@ -351,6 +351,9 @@ class LedgerWriter(
         validateExchangeRateGuardrail(currency, exchangeRate)
         val treasury = db.treasuryDao().getTreasuryById(treasuryId)
             ?: error("Treasury account $treasuryId not found")
+        require(treasury.currency == currency.name) {
+            "Treasury currency (${treasury.currency}) must match contribution currency (${currency.name})"
+        }
 
         val docNumber = allocateNextDocNumber(DocumentType.RECEIPT_VOUCHER.name, fiscalYear)
         val docId = UuidUtils.newTimeOrderedId()

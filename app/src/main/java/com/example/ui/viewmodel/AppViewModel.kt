@@ -98,6 +98,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val backupRestoreUseCase = BackupRestoreUseCase(db)
     val batchImportUseCase = BatchImportUseCase(db, writer)
     val exchangeRateResolver = ExchangeRateResolver(db)
+    val partnerEquityUseCase = com.example.domain.usecase.PartnerEquityUseCase(db, writer)
 
     // Organization & Exchange Rates
     val organization: StateFlow<OrganizationEntity?> = db.organizationDao().getOrganizationFlow()
@@ -127,6 +128,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     // Base Flows
     val allParties: StateFlow<List<PartyEntity>> = repository.allParties
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allPartners: StateFlow<List<PartyEntity>> = db.partyDao().getPartnersFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val allPackages: StateFlow<List<CardPackageEntity>> = repository.allPackages
@@ -547,6 +551,49 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun getPartnerCapitalBalanceFlow(partnerId: String): Flow<Long> {
         return db.journalDao().getPartnerCapitalBalanceFlow(partnerId)
+    }
+
+    fun getPartnerCurrentBalanceFlow(partnerId: String): Flow<Long> {
+        return db.journalDao().getPartnerCurrentBalanceFlow(partnerId)
+    }
+
+    fun getTotalCapitalBalanceFlow(): Flow<Long> {
+        return db.journalDao().getTotalCapitalBalanceFlow()
+    }
+
+    fun setEquityShareMode(mode: com.example.core.model.EquityShareMode) {
+        viewModelScope.launch {
+            try {
+                partnerEquityUseCase.setEquityShareMode(mode)
+                _userMessage.emit("تم تحديث نمط احتساب حصص الملكية إلى: ${mode.title}")
+            } catch (e: Exception) {
+                _userMessage.emit("فشل تحديث نمط احتساب الحصص: ${e.message}")
+            }
+        }
+    }
+
+    fun executeProfitDistribution(
+        fiscalYear: Int,
+        totalProfitMinor: Long,
+        notes: String = "",
+        onSuccess: () -> Unit
+    ) {
+        viewModelScope.launch {
+            try {
+                val today = getLocalNow().toEpochDay()
+                val doc = partnerEquityUseCase.executeProfitDistribution(
+                    fiscalYear = fiscalYear,
+                    dateEpochDay = today,
+                    totalProfitMinor = totalProfitMinor,
+                    notes = notes
+                )
+                _userMessage.emit("تم توزيع الأرباح بنجاح بسند رقم #${doc.docNumber} بدون أي فواقد رياضية")
+                refreshDashboard()
+                onSuccess()
+            } catch (e: Exception) {
+                _userMessage.emit("تعذر توزيع الأرباح: ${e.message}")
+            }
+        }
     }
 
     fun getDocumentsByPartyFlow(partyId: String): Flow<List<DocumentEntity>> {

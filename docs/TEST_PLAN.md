@@ -30,6 +30,14 @@ The test suite ensures 100% compliance with double-entry mathematical invariants
 10. **Cent-Level Multi-Line Balancing:** Multi-line foreign currency invoice balances down to the single minor unit after integer conversion.
 11. **Schema & Migration Test:** Verify database creation and table integrity under Room v1 schema.
 
+### Suite C: Multi-Currency Partner Capital & Equity Ratios (`PartnerCapitalPartCTest`)
+25. **Historical Cost Principle (C.1):** Multi-currency capital contribution recorded at historical rate (DR Treasury, CR 3101 in base YER).
+26. **IAS 21 Non-Revaluation of Equity (C.1):** Non-monetary equity is never revalued; historical capital remains frozen under rate spikes.
+27. **Dynamic Partner Share (C.2):** DERIVED_FROM_CAPITAL dynamically calculates partner share bps from account 3101.
+28. **Fixed Agreed Validation (C.2):** FIXED_AGREED enforces sum of partner shares == 100.00% (10,000 bps).
+29. **Hare-Niemeyer Profit Distribution (C.2):** Largest Remainder Method distributes uneven profits with zero rounding residue down to 1 Rial (DR 3301, CR 3201).
+30. **Capital Contribution Voiding & Reversal (C.1/C.3):** Voiding multi-currency contribution posts compensatory reversal entry and satisfies all invariants.
+
 ## 3. Execution Command
 ```bash
 gradle :app:testDebugUnitTest

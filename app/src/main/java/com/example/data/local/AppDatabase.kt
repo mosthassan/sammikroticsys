@@ -64,7 +64,7 @@ import kotlinx.coroutines.launch
         AuditLogEntity::class,
         IdempotencyKeyEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -94,6 +94,12 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE organizations ADD COLUMN equityShareMode TEXT NOT NULL DEFAULT 'DERIVED_FROM_CAPITAL'")
+            }
+        }
+
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
@@ -109,7 +115,7 @@ abstract class AppDatabase : RoomDatabase() {
                 AppDatabase::class.java,
                 DATABASE_NAME
             )
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .addCallback(DatabaseCallback())
                 // Destructive migration is strictly forbidden
                 .build()
@@ -120,7 +126,7 @@ abstract class AppDatabase : RoomDatabase() {
                 context.applicationContext,
                 AppDatabase::class.java
             )
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .addCallback(DatabaseCallback())
                 .allowMainThreadQueries()
                 .build()
@@ -182,8 +188,8 @@ abstract class AppDatabase : RoomDatabase() {
         fun seedDefaultData(db: SupportSQLiteDatabase) {
             // Seed Organization
             db.execSQL("""
-                INSERT OR IGNORE INTO organizations (id, name, taxNumber, functionalCurrency, fiscalYearStartMonth, isInitialized, primaryRateZone, createdAt)
-                VALUES ('DEFAULT_ORG', 'شبكة سام اللاسلكية', '', 'YER', 1, 1, 'SANAA', strftime('%s','now') * 1000)
+                INSERT OR IGNORE INTO organizations (id, name, taxNumber, functionalCurrency, fiscalYearStartMonth, isInitialized, primaryRateZone, equityShareMode, createdAt)
+                VALUES ('DEFAULT_ORG', 'شبكة سام اللاسلكية', '', 'YER', 1, 1, 'SANAA', 'DERIVED_FROM_CAPITAL', strftime('%s','now') * 1000)
             """)
 
             // Seed Permanent Walk-in Cash Party

@@ -229,6 +229,34 @@ internal interface JournalDao {
     suspend fun getPartnerCapitalBalanceSync(partyId: String): Long
 
     @Query("""
+        SELECT COALESCE(SUM(baseCreditMinor) - SUM(baseDebitMinor), 0)
+        FROM journal_lines
+        WHERE accountCode = '3101'
+    """)
+    suspend fun getTotalCapitalBalanceSync(): Long
+
+    @Query("""
+        SELECT COALESCE(SUM(baseCreditMinor) - SUM(baseDebitMinor), 0)
+        FROM journal_lines
+        WHERE accountCode = '3101'
+    """)
+    fun getTotalCapitalBalanceFlow(): Flow<Long>
+
+    @Query("""
+        SELECT COALESCE(SUM(baseCreditMinor) - SUM(baseDebitMinor), 0)
+        FROM journal_lines
+        WHERE partyId = :partyId AND accountCode = '3201'
+    """)
+    suspend fun getPartnerCurrentBalanceSync(partyId: String): Long
+
+    @Query("""
+        SELECT COALESCE(SUM(baseCreditMinor) - SUM(baseDebitMinor), 0)
+        FROM journal_lines
+        WHERE partyId = :partyId AND accountCode = '3201'
+    """)
+    fun getPartnerCurrentBalanceFlow(partyId: String): Flow<Long>
+
+    @Query("""
         SELECT COALESCE(SUM(baseDebitMinor) - SUM(baseCreditMinor), 0)
         FROM journal_lines
         WHERE treasuryId = :treasuryId
@@ -323,6 +351,9 @@ interface PartyDao {
 
     @Query("SELECT * FROM parties WHERE isPartner = 1 ORDER BY name ASC")
     fun getPartnersFlow(): Flow<List<PartyEntity>>
+
+    @Query("SELECT * FROM parties WHERE isPartner = 1 ORDER BY name ASC")
+    suspend fun getPartnersSync(): List<PartyEntity>
 }
 
 @Dao
@@ -561,4 +592,7 @@ interface OrganizationDao {
 
     @Update
     suspend fun updateOrganization(org: OrganizationEntity)
+
+    @Query("UPDATE organizations SET equityShareMode = :mode WHERE id = :orgId")
+    suspend fun updateEquityShareMode(orgId: String, mode: String)
 }

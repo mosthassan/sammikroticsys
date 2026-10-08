@@ -14,6 +14,7 @@ data class OrganizationEntity(
     val fiscalYearStartMonth: Int = 1,
     val isInitialized: Boolean = false,
     val primaryRateZone: String = "SANAA",
+    val equityShareMode: String = "DERIVED_FROM_CAPITAL",
     val createdAt: Long = System.currentTimeMillis()
 )
 

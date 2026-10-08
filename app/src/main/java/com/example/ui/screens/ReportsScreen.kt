@@ -3,6 +3,7 @@ package com.example.ui.screens
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import com.example.ui.theme.CyberBorder
 import com.example.ui.theme.CyberDarkCardElevated
 import com.example.ui.theme.TextPrimaryDark
@@ -35,6 +36,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.HourglassBottom
+import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
@@ -187,7 +189,7 @@ fun ReportsScreen(
                 2 -> AgingReportView(agingReport, onRefresh = {
                     viewModel.loadAgingReport(todayEpoch)
                 })
-                3 -> PartnerDividendsView(incomeReport, balanceReport)
+                3 -> PartnerDividendsView(incomeReport, balanceReport, viewModel)
                 4 -> CloudSyncAndBackupView(viewModel)
             }
         }
@@ -650,15 +652,34 @@ private fun AgingBucketCard(
 @Composable
 private fun PartnerDividendsView(
     incomeReport: IncomeStatementReport?,
-    balanceReport: BalanceSheetReport?
+    balanceReport: BalanceSheetReport?,
+    viewModel: AppViewModel
 ) {
     val netProfit = incomeReport?.netProfitMinor ?: 0L
-    var partnerSharePercent by remember { mutableStateOf("50") }
+    val org by viewModel.organization.collectAsState(initial = null)
+    val partners by viewModel.allPartners.collectAsState(initial = emptyList())
+    val activePartners = remember(partners) { partners.filter { it.isPartner && it.isActive } }
+
+    val currentMode = com.example.core.model.EquityShareMode.fromString(org?.equityShareMode)
+
+    var equitySummary by remember { mutableStateOf<com.example.domain.usecase.PartnerEquitySummary?>(null) }
+    LaunchedEffect(activePartners, currentMode) {
+        equitySummary = viewModel.partnerEquityUseCase.getEquitySummary()
+    }
+
+    var profitToDistributeText by remember(netProfit) {
+        mutableStateOf(if (netProfit > 0) (netProfit / 100L).toString() else "0")
+    }
+    var distributionNotes by remember { mutableStateOf("توزيع أرباح دوري وفق معايير المحاسبة IFRS") }
+    var isPosting by remember { mutableStateOf(false) }
+
+    val parsedProfitMinor = (profitToDistributeText.toLongOrNull() ?: 0L) * 100L
 
     LazyColumn(
         verticalArrangement = Arrangement.spacedBy(14.dp),
         modifier = Modifier.fillMaxSize()
     ) {
+        // Hero Information Card
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -666,19 +687,20 @@ private fun PartnerDividendsView(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("حاسبة توزيع أرباح الشركاء والشبكة", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Text("نظام توزيع أرباح الشركاء (Hare-Niemeyer)", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        "تتيح احتساب حصة كل شريك آلياً بناءً على صافي الأرباح المحققة بعد خصم التكاليف التشغيلية وعمليات السحب السابقة.",
-                        fontSize = 12.sp,
+                        "تطبيق رياضي صارم لطريقة أكبر البواقي يضمن صفر بواقي تقريب وتوزيع الأرباح بالريال الكامل إلى جاري الشركاء (3201).",
+                        fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("صافي أرباح الفترة القابلة للتوزيع:", fontSize = 13.sp)
+                        Text("صافي أرباح الفترة المحققة:", fontSize = 13.sp)
                         AmountText(
                             money = Money(netProfit, CurrencyCode.FUNCTIONAL),
                             semanticType = AmountSemanticType.INCOME,
@@ -689,48 +711,161 @@ private fun PartnerDividendsView(
             }
         }
 
+        // Equity Mode Switcher
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SectionHeader(title = "نمط احتساب حصص الملكية (Equity Share Mode)")
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        com.example.core.model.EquityShareMode.values().forEach { mode ->
+                            val isSelected = currentMode == mode
+                            Surface(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { viewModel.setEquityShareMode(mode) }
+                                    .border(
+                                        BorderStroke(1.dp, if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
+                                        RoundedCornerShape(10.dp)
+                                    ),
+                                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(10.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        text = mode.title,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        fontSize = 11.sp,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                        color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Profit Distribution Configuration & Partners Simulation
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    SectionHeader(title = "محاكاة التوزيع بالنسب المئوية")
+                    SectionHeader(title = "المبلغ المراد توزيعه بالريال اليمني (YER)")
 
                     OutlinedTextField(
-                        value = partnerSharePercent,
-                        onValueChange = { partnerSharePercent = it },
-                        label = { Text("نسبة الشريك من رأس المال (%)") },
+                        value = profitToDistributeText,
+                        onValueChange = { profitToDistributeText = it.filter { ch -> ch.isDigit() } },
+                        label = { Text("المبلغ الإجمالي للتوزيع (DR 3301 / CR 3201)") },
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    val cleanP = partnerSharePercent.trim().replace("،", "").replace("٬", "").replace(",", "").replace("٫", ".")
-                    val pParts = cleanP.split(".")
-                    val pWhole = pParts.getOrNull(0)?.toLongOrNull() ?: 50L
-                    val pFrac = pParts.getOrNull(1)?.padEnd(2, '0')?.take(2)?.toLongOrNull() ?: 0L
-                    val pBps = (pWhole * 100L + pFrac).coerceIn(0L, 10000L)
-                    val partnerShareMinor = (netProfit * pBps) / 10000L
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("الحصة المستحقة للشريك:", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                        AmountText(
-                            money = Money(partnerShareMinor, CurrencyCode.FUNCTIONAL),
-                            semanticType = AmountSemanticType.INCOME,
-                            fontSize = 18,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    Text(
-                        text = "ملاحظة: لصرف الأرباح فعلياً، يتم تحرير سند صرف (Payment Voucher) للمسحوبات أو توزيع الأرباح ليتم إدراج قيد (DR 3201 جاري الشريك، CR 1101 الخزينة).",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    OutlinedTextField(
+                        value = distributionNotes,
+                        onValueChange = { distributionNotes = it },
+                        label = { Text("بيان قيد توزيع الأرباح") },
+                        modifier = Modifier.fillMaxWidth()
                     )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text("محاكاة الحصص لجميع الشركاء النشطين (${activePartners.size}):", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+
+                    if (activePartners.isEmpty()) {
+                        Text("لا يوجد شركاء نشطون مسجلون في النظام.", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                    } else {
+                        // Compute shares using PartnerEquityUseCase Hare-Niemeyer logic
+                        val weights = activePartners.map { p ->
+                            val weight = if (currentMode == com.example.core.model.EquityShareMode.DERIVED_FROM_CAPITAL) {
+                                // Dynamic capital weight
+                                val cap = equitySummary?.partners?.find { it.partnerId == p.id }?.historicalCapitalMinor ?: 0L
+                                if (cap > 0L) cap else 1L
+                            } else {
+                                p.equityPercentageBasisPoints.toLong().coerceAtLeast(1L)
+                            }
+                            com.example.domain.usecase.PartnerWeight(p.id, p.name, weight)
+                        }
+
+                        val computedShares = if (parsedProfitMinor > 0L && weights.sumOf { it.weight } > 0L) {
+                            try {
+                                viewModel.partnerEquityUseCase.calculateHareNiemeyerDistribution(parsedProfitMinor, weights)
+                            } catch (e: Exception) {
+                                emptyList()
+                            }
+                        } else emptyList()
+
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            activePartners.forEach { partner ->
+                                val share = computedShares.find { it.partnerPartyId == partner.id }
+                                val shareAmountMinor = share?.amountMinor ?: 0L
+
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column {
+                                            Text(partner.name, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                            val pct = partner.equityPercentageBasisPoints / 100.0
+                                            Text(
+                                                if (currentMode == com.example.core.model.EquityShareMode.DERIVED_FROM_CAPITAL) "حصة ديناميكية من رأس المال" else "نسبة متفق عليها: $pct%",
+                                                fontSize = 10.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+
+                                        AmountText(
+                                            money = Money(shareAmountMinor, CurrencyCode.FUNCTIONAL),
+                                            semanticType = AmountSemanticType.INCOME,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Button(
+                            onClick = {
+                                if (parsedProfitMinor > 0L) {
+                                    isPosting = true
+                                    val year = java.time.LocalDate.now().year
+                                    viewModel.executeProfitDistribution(
+                                        fiscalYear = year,
+                                        totalProfitMinor = parsedProfitMinor,
+                                        notes = distributionNotes,
+                                        onSuccess = { isPosting = false }
+                                    )
+                                }
+                            },
+                            enabled = parsedProfitMinor > 0L && !isPosting,
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Payments, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("ترحيل سند توزيع الأرباح إلى جاري الشركاء (DR 3301 / CR 3201)", fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             }
         }
