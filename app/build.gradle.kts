@@ -1,4 +1,12 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import java.util.Locale
+
+// Force US Locale and UTF-8 encoding so KSP and Room code generators on Arabic Windows
+// generate ASCII numeric literals (e.g., RoomOpenDelegate(3, ...)) rather than Arabic-Indic numerals (RoomOpenDelegate(٣, ...)).
+Locale.setDefault(Locale.US)
+System.setProperty("user.language", "en")
+System.setProperty("user.country", "US")
+System.setProperty("file.encoding", "UTF-8")
 
 plugins {
   alias(libs.plugins.android.application)
@@ -72,6 +80,19 @@ secrets {
 
 ksp {
   arg("room.schemaLocation", "$projectDir/schemas")
+}
+
+tasks.withType<JavaCompile>().configureEach {
+  options.encoding = "UTF-8"
+}
+
+tasks.matching { it.name.startsWith("ksp") }.configureEach {
+  doFirst {
+    Locale.setDefault(Locale.US)
+    System.setProperty("user.language", "en")
+    System.setProperty("user.country", "US")
+    System.setProperty("file.encoding", "UTF-8")
+  }
 }
 
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
