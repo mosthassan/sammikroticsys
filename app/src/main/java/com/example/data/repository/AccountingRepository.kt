@@ -64,6 +64,8 @@ class AccountingRepository(
 
     suspend fun insertParty(party: PartyEntity) = db.partyDao().insertParty(party)
 
+    suspend fun updateParty(party: PartyEntity) = db.partyDao().updateParty(party)
+
     suspend fun insertTreasury(treasury: TreasuryAccountEntity) = db.treasuryDao().insertTreasury(treasury)
 
     suspend fun insertPackage(pkg: CardPackageEntity) = db.cardPackageDao().insertPackage(pkg)

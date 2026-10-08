@@ -50,6 +50,9 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.platform.LocalContext
+import com.example.ui.components.AddEditPartyDialog
+import com.example.util.WhatsAppDispatcher
 import com.example.ui.components.PartyJsonBackupDialog
 import com.example.ui.components.PartnerDetailDialog
 import com.example.ui.theme.CyberBorder
@@ -300,11 +303,49 @@ fun PartiesScreen(
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column {
                                     Text(text = party.name, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
                                         if (party.isCustomer) RoleChip("وكيل/بقالة", SemanticIncomeGreen)
                                         if (party.isVendor) RoleChip("مورد", Color(0xFF3B82F6))
                                         if (party.isPartner) RoleChip("شريك", SemanticWarningAmber)
                                         if (!party.isActive) RoleChip("مؤرشف", Color.Gray)
+
+                                        if (party.phone.isNotBlank()) {
+                                            val context = LocalContext.current
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Surface(
+                                                shape = RoundedCornerShape(4.dp),
+                                                color = Color(0xFF25D366).copy(alpha = 0.15f),
+                                                modifier = Modifier.clickable {
+                                                    WhatsAppDispatcher.sendTextMessage(
+                                                        context,
+                                                        party.phone,
+                                                        "مرحباً ${party.name}، بخصوص حسابك في شبكة SamMikrotik."
+                                                    )
+                                                }
+                                            ) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Phone,
+                                                        contentDescription = "واتساب",
+                                                        tint = Color(0xFF25D366),
+                                                        modifier = Modifier.size(10.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(2.dp))
+                                                    Text(
+                                                        party.phone,
+                                                        fontSize = 9.sp,
+                                                        color = Color(0xFF25D366),
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -331,18 +372,21 @@ fun PartiesScreen(
         }
     }
 
-    // Statement of Account Dialog
+    // Party Ledger & Statement Dialog
     selectedPartyForStatement?.let { party ->
-        StatementOfAccountDialog(
+        PartyLedgerDialog(
             party = party,
             report = currentStatement,
-            onDismiss = { selectedPartyForStatement = null }
+            onDismiss = { selectedPartyForStatement = null },
+            onEditParty = { updated ->
+                viewModel.updateParty(updated) {}
+            }
         )
     }
 
-    // Add Party Dialog (Full Screen Responsive with Keyboard Avoidance)
+    // Add Party Dialog with Native Contact Picker & WhatsApp Support
     if (showAddPartySheet) {
-        AddPartyDialog(
+        AddEditPartyDialog(
             initialRole = selectedTab,
             onDismiss = { showAddPartySheet = false },
             onSubmit = { name, phone, isCust, isVend, isPart, limitMinor, equityBps ->
@@ -488,305 +532,12 @@ fun AddPartyDialog(
     onDismiss: () -> Unit,
     onSubmit: (name: String, phone: String, isCustomer: Boolean, isVendor: Boolean, isPartner: Boolean, creditLimitMinor: Long, equityBasisPoints: Int) -> Unit
 ) {
-    var name by remember { mutableStateOf("") }
-    var phone by remember { mutableStateOf("") }
-    var isCustomer by remember { mutableStateOf(initialRole == 0 || initialRole == 1) }
-    var isVendor by remember { mutableStateOf(initialRole == 2) }
-    var isPartner by remember { mutableStateOf(initialRole == 3) }
-    var creditLimitText by remember { mutableStateOf("") }
-    var equityShareText by remember { mutableStateOf("") }
-
-    val emeraldColor = Color(0xFF10B981)
-    val blueColor = Color(0xFF3B82F6)
-    val amberColor = Color(0xFFF59E0B)
-
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth(0.94f)
-                .heightIn(max = 720.dp)
-                .clip(RoundedCornerShape(22.dp))
-                .border(BorderStroke(1.dp, CyberBorder), RoundedCornerShape(22.dp)),
-            color = CyberDarkSurface
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .imePadding()
-            ) {
-                // Header Bar (Pinned)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(CyberDarkCardElevated)
-                        .padding(horizontal = 18.dp, vertical = 14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(MikroTikPrimary.copy(alpha = 0.2f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(Icons.Default.PersonAdd, contentDescription = null, tint = MikroTikCyan, modifier = Modifier.size(22.dp))
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text("إضافة طرف جديد للنظام", color = TextPrimaryDark, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                            Text("تسجيل بقالة، مورد شبكة، أو شريك رأسمالي", color = TextSecondaryDark, fontSize = 11.sp)
-                        }
-                    }
-
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "إغلاق", tint = TextSecondaryDark)
-                    }
-                }
-
-                HorizontalDivider(color = CyberBorder)
-
-                // Scrollable Form Fields
-                Column(
-                    modifier = Modifier
-                        .weight(1f, fill = false)
-                        .verticalScroll(rememberScrollState())
-                        .padding(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    // Full Name Input
-                    OutlinedTextField(
-                        value = name,
-                        onValueChange = { name = it },
-                        label = { Text("الاسم الكامل للطرف أو المحل (مطلوب)") },
-                        leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, tint = MikroTikCyan) },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MikroTikCyan,
-                            unfocusedBorderColor = CyberBorder,
-                            focusedTextColor = TextPrimaryDark,
-                            unfocusedTextColor = TextPrimaryDark,
-                            focusedContainerColor = CyberDarkCardElevated,
-                            unfocusedContainerColor = CyberDarkCardElevated
-                        ),
-                        singleLine = true
-                    )
-
-                    // Phone / WhatsApp Input
-                    OutlinedTextField(
-                        value = phone,
-                        onValueChange = { phone = it },
-                        label = { Text("رقم الهاتف أو الواتساب") },
-                        leadingIcon = { Icon(Icons.Default.Phone, contentDescription = null, tint = MikroTikCyan) },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MikroTikCyan,
-                            unfocusedBorderColor = CyberBorder,
-                            focusedTextColor = TextPrimaryDark,
-                            unfocusedTextColor = TextPrimaryDark,
-                            focusedContainerColor = CyberDarkCardElevated,
-                            unfocusedContainerColor = CyberDarkCardElevated
-                        ),
-                        singleLine = true
-                    )
-
-                    Spacer(modifier = Modifier.height(2.dp))
-
-                    Text(
-                        "تحديد أدوار وتصنيف الطرف (يمكن اختيار أكثر من دور):",
-                        color = TextPrimaryDark,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp
-                    )
-
-                    // Role 1: Customer / Grocery Store
-                    ModernRoleSelectionCard(
-                        title = "وكيل / بقالة توزيع كروت",
-                        subtitle = "حساب مدين ومبيعات كروت بالآجل وسندات قبض",
-                        icon = Icons.Default.Store,
-                        tintColor = emeraldColor,
-                        isSelected = isCustomer,
-                        onToggle = { isCustomer = !isCustomer }
-                    )
-
-                    // Role 2: Network Equipment Vendor
-                    ModernRoleSelectionCard(
-                        title = "مورد أجهزة وخدمات شبكة",
-                        subtitle = "حساب دائن وفواتير مشتريات (أبراج، راوترات، خطوط إنترنت)",
-                        icon = Icons.Default.LocalShipping,
-                        tintColor = blueColor,
-                        isSelected = isVendor,
-                        onToggle = { isVendor = !isVendor }
-                    )
-
-                    // Role 3: Capital Partner
-                    ModernRoleSelectionCard(
-                        title = "شريك ومساهم في رأس المال",
-                        subtitle = "سندات مساهمة نقدية وعينية، حصص الأرباح، وسجل الأستاذ 3101",
-                        icon = Icons.Default.Handshake,
-                        tintColor = amberColor,
-                        isSelected = isPartner,
-                        onToggle = { isPartner = !isPartner }
-                    )
-
-                    // Contextual Settings for Customer (Credit Limit)
-                    if (isCustomer) {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = emeraldColor.copy(alpha = 0.08f)),
-                            border = BorderStroke(1.dp, emeraldColor.copy(alpha = 0.4f)),
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Column(modifier = Modifier.padding(14.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, tint = emeraldColor, modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("الحد الائتماني المسموح به للبقالة (آجل)", color = emeraldColor, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                }
-                                Spacer(modifier = Modifier.height(8.dp))
-                                OutlinedTextField(
-                                    value = creditLimitText,
-                                    onValueChange = { creditLimitText = it },
-                                    label = { Text("المبلغ بالريال اليمني (YER)") },
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                    modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(10.dp),
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedBorderColor = emeraldColor,
-                                        unfocusedBorderColor = CyberBorder,
-                                        focusedTextColor = TextPrimaryDark,
-                                        unfocusedTextColor = TextPrimaryDark,
-                                        focusedContainerColor = CyberDarkCardElevated,
-                                        unfocusedContainerColor = CyberDarkCardElevated
-                                    )
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    listOf("25000", "50000", "100000", "200000").forEach { quickVal ->
-                                        Surface(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .clickable { creditLimitText = quickVal }
-                                                .border(1.dp, emeraldColor.copy(alpha = 0.3f), RoundedCornerShape(8.dp)),
-                                            color = emeraldColor.copy(alpha = 0.12f)
-                                        ) {
-                                            Text(
-                                                "${quickVal.toInt() / 1000} ألف",
-                                                color = TextPrimaryDark,
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.SemiBold,
-                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Contextual Settings for Partner (Equity Share %)
-                    if (isPartner) {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = amberColor.copy(alpha = 0.08f)),
-                            border = BorderStroke(1.dp, amberColor.copy(alpha = 0.4f)),
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Column(modifier = Modifier.padding(14.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.PieChart, contentDescription = null, tint = amberColor, modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("نسبة الشريك في توزيع الأرباح %", color = amberColor, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                }
-                                Spacer(modifier = Modifier.height(8.dp))
-                                OutlinedTextField(
-                                    value = equityShareText,
-                                    onValueChange = { equityShareText = it },
-                                    label = { Text("النسبة المئوية % (مثال: 25)") },
-                                    leadingIcon = { Icon(Icons.Default.Percent, contentDescription = null, tint = amberColor) },
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                                    modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(10.dp),
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedBorderColor = amberColor,
-                                        unfocusedBorderColor = CyberBorder,
-                                        focusedTextColor = TextPrimaryDark,
-                                        unfocusedTextColor = TextPrimaryDark,
-                                        focusedContainerColor = CyberDarkCardElevated,
-                                        unfocusedContainerColor = CyberDarkCardElevated
-                                    )
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    listOf("10", "20", "25", "33.3", "50").forEach { quickPct ->
-                                        Surface(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .clickable { equityShareText = quickPct }
-                                                .border(1.dp, amberColor.copy(alpha = 0.3f), RoundedCornerShape(8.dp)),
-                                            color = amberColor.copy(alpha = 0.12f)
-                                        ) {
-                                            Text(
-                                                "$quickPct%",
-                                                color = TextPrimaryDark,
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.SemiBold,
-                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                HorizontalDivider(color = CyberBorder)
-
-                // Pinned Action Button at Bottom
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(CyberDarkCardElevated)
-                        .padding(16.dp)
-                ) {
-                    val isValid = name.isNotBlank() && (isCustomer || isVendor || isPartner)
-
-                    Button(
-                        onClick = {
-                            if (isValid) {
-                                val limit = (creditLimitText.toLongOrNull() ?: 0L) * 100L
-                                val cleanEq = equityShareText.trim().replace("،", "").replace("٬", "").replace(",", "").replace("٫", ".")
-                                val eqParts = cleanEq.split(".")
-                                val eqWhole = eqParts.getOrNull(0)?.toIntOrNull() ?: 0
-                                val eqFrac = eqParts.getOrNull(1)?.padEnd(2, '0')?.take(2)?.toIntOrNull() ?: 0
-                                val equityBps = (eqWhole * 100 + eqFrac).coerceIn(0, 10000)
-                                onSubmit(name.trim(), phone.trim(), isCustomer, isVendor, isPartner, limit, equityBps)
-                            }
-                        },
-                        enabled = isValid,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MikroTikPrimary,
-                            disabledContainerColor = CyberDarkSurface
-                        ),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth().height(48.dp)
-                    ) {
-                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("حفظ وتثبيت الطرف في النظام", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    }
-                }
-            }
-        }
-    }
+    AddEditPartyDialog(
+        partyToEdit = null,
+        initialRole = initialRole,
+        onDismiss = onDismiss,
+        onSubmit = onSubmit
+    )
 }
 
 @Composable

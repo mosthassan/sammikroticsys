@@ -1040,6 +1040,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun updateParty(party: PartyEntity, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                repository.updateParty(party)
+                _userMessage.emit("تم تحديث بيانات الطرف بنجاح")
+                onSuccess()
+            } catch (e: Exception) {
+                _userMessage.emit("فشل تحديث بيانات الطرف: ${e.message}")
+            }
+        }
+    }
+
     fun setPartyActive(partyId: String, isActive: Boolean) {
         viewModelScope.launch {
             db.partyDao().setPartyActive(partyId, isActive)
