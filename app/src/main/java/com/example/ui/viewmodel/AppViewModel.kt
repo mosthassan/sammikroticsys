@@ -629,6 +629,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         exchangeRate: ExchangeRate,
         items: List<PurchaseItemSpec>,
         notes: String,
+        rateZone: RateZone = RateZone.DEFAULT,
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
@@ -643,7 +644,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     currency = currency,
                     exchangeRate = exchangeRate,
                     items = items,
-                    notes = notes
+                    notes = notes,
+                    rateZone = rateZone
                 )
                 _userMessage.emit("تم ترحيل فاتورة المشتريات وتسجيل الأصول إن وُجدت")
                 refreshDashboard()

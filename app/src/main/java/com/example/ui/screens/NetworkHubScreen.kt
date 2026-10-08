@@ -204,6 +204,23 @@ fun NetworkHubScreen(
                     onSave = { updated ->
                         scope.launch {
                             networkRepository.saveConfig(updated)
+                            val today = java.time.LocalDate.now().toEpochDay()
+                            viewModel?.addExchangeRate(
+                                currency = CurrencyCode.USD,
+                                zone = updated.rateZone,
+                                rateMicros = updated.defaultUsdRateMicros,
+                                effectiveDateEpochDay = today,
+                                reason = "تحديث أسعار صرف هوية الشبكة",
+                                confirmSignificantChange = true
+                            )
+                            viewModel?.addExchangeRate(
+                                currency = CurrencyCode.SAR,
+                                zone = updated.rateZone,
+                                rateMicros = updated.defaultSarRateMicros,
+                                effectiveDateEpochDay = today,
+                                reason = "تحديث أسعار صرف هوية الشبكة",
+                                confirmSignificantChange = true
+                            )
                             Toast.makeText(context, "تم حفظ بيانات تهيئة الشبكة بنجاح!", Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -431,6 +448,9 @@ private fun NetworkConfigTab(
     var primaryDns by remember(config) { mutableStateOf(config.primaryDns) }
     var secondaryDns by remember(config) { mutableStateOf(config.secondaryDns) }
     var approvedSubnet by remember(config) { mutableStateOf(config.approvedSubnet) }
+    var rateZone by remember(config) { mutableStateOf(config.rateZone) }
+    var usdRateText by remember(config) { mutableStateOf(ExchangeRate.formatRateMicros(config.defaultUsdRateMicros)) }
+    var sarRateText by remember(config) { mutableStateOf(ExchangeRate.formatRateMicros(config.defaultSarRateMicros)) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -498,8 +518,106 @@ private fun NetworkConfigTab(
         }
 
         item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = CyberDarkCardElevated),
+                border = BorderStroke(1.dp, CyberBorder),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "الإعدادات المالية وأسعار الصرف الافتراضية",
+                            color = TextPrimaryDark,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                        Surface(
+                            color = MikroTikCyan.copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text(
+                                "IAS 21",
+                                color = MikroTikCyan,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        "تحديد نطاق التسعير الجغرافي وأسعار الصرف التلقائية التي تُستخدم تلقائياً عند إنشاء فواتير المشتريات والمصروفات بالعملات الأجنبية.",
+                        color = TextSecondaryDark,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text("النطاق الجغرافي للتسعير (Pricing Zone):", color = TextPrimaryDark, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = rateZone == RateZone.SANAA,
+                            onClick = { rateZone = RateZone.SANAA },
+                            label = { Text("صنعاء والمحافظات الشمالية", fontSize = 11.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MikroTikPrimary,
+                                selectedLabelColor = Color.White
+                            ),
+                            modifier = Modifier.weight(1f)
+                        )
+                        FilterChip(
+                            selected = rateZone == RateZone.ADEN,
+                            onClick = { rateZone = RateZone.ADEN },
+                            label = { Text("عدن والمحافظات الجنوبية", fontSize = 11.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MikroTikPrimary,
+                                selectedLabelColor = Color.White
+                            ),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HubTextField(
+                        label = "سعر صرف الدولار الافتراضي (1 USD مقابل YER)",
+                        value = usdRateText,
+                        onValueChange = { usdRateText = it }
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    HubTextField(
+                        label = "سعر صرف الريال السعودي الافتراضي (1 SAR مقابل YER)",
+                        value = sarRateText,
+                        onValueChange = { sarRateText = it }
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    val dateFormatted = remember(config.updatedAt) {
+                        val instant = java.time.Instant.ofEpochMilli(config.updatedAt)
+                        val zdt = java.time.ZonedDateTime.ofInstant(instant, java.time.ZoneId.systemDefault())
+                        zdt.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+                    }
+                    Text(
+                        text = "آخر تحديث لسعر صرف الهوية: $dateFormatted (العملة الأساسية: YER)",
+                        color = TextMutedDark,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+        }
+
+        item {
             Button(
                 onClick = {
+                    val parsedUsd = ExchangeRate.parseRateFromUserInput(usdRateText) ?: config.defaultUsdRateMicros
+                    val parsedSar = ExchangeRate.parseRateFromUserInput(sarRateText) ?: config.defaultSarRateMicros
                     onSave(
                         config.copy(
                             networkName = networkName,
@@ -513,7 +631,11 @@ private fun NetworkConfigTab(
                             hotspotDomain = hotspotDomain,
                             approvedSubnet = approvedSubnet,
                             primaryDns = primaryDns,
-                            secondaryDns = secondaryDns
+                            secondaryDns = secondaryDns,
+                            rateZone = rateZone,
+                            defaultUsdRateMicros = parsedUsd,
+                            defaultSarRateMicros = parsedSar,
+                            updatedAt = System.currentTimeMillis()
                         )
                     )
                 },

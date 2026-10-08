@@ -1,6 +1,7 @@
 package com.example.data.network
 
 import android.content.Context
+import com.example.core.model.RateZone
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,8 +26,17 @@ data class NetworkConfig(
     val adminPort: Int = 8728,
     val primaryDns: String = "8.8.8.8",
     val secondaryDns: String = "1.1.1.1",
-    val approvedSubnet: String = "10.10.0.0/16"
-)
+    val approvedSubnet: String = "10.10.0.0/16",
+    val rateZone: RateZone = RateZone.SANAA,
+    val defaultUsdRateMicros: Long = 535_000_000L,
+    val defaultSarRateMicros: Long = 140_500_000L,
+    val updatedAt: Long = System.currentTimeMillis()
+) {
+    val defaultUsdRate: Double get() = defaultUsdRateMicros.toDouble() / 1_000_000.0
+    val defaultSarRate: Double get() = defaultSarRateMicros.toDouble() / 1_000_000.0
+}
+
+typealias NetworkProfile = NetworkConfig
 
 enum class DeviceType(val labelArabic: String) {
     ACCESS_POINT("سيكتور بث AP"),
@@ -104,6 +114,11 @@ class NetworkRepository(private val context: Context) : com.example.data.local.d
         return try {
             if (configFile.exists()) {
                 val json = JSONObject(configFile.readText())
+                val zoneStr = json.optString("rateZone", RateZone.SANAA.name)
+                val zone = runCatching { RateZone.valueOf(zoneStr) }.getOrDefault(RateZone.SANAA)
+                val usdMicros = json.optLong("defaultUsdRateMicros", 535_000_000L)
+                val sarMicros = json.optLong("defaultSarRateMicros", 140_500_000L)
+                val updatedAt = json.optLong("updatedAt", System.currentTimeMillis())
                 NetworkConfig(
                     networkName = json.optString("networkName", "شبكة توزيع الإنترنت"),
                     ownerName = json.optString("ownerName", "مدير الشبكة"),
@@ -118,7 +133,11 @@ class NetworkRepository(private val context: Context) : com.example.data.local.d
                     adminPort = json.optInt("adminPort", 8728),
                     primaryDns = json.optString("primaryDns", "8.8.8.8"),
                     secondaryDns = json.optString("secondaryDns", "1.1.1.1"),
-                    approvedSubnet = json.optString("approvedSubnet", "10.10.0.0/16")
+                    approvedSubnet = json.optString("approvedSubnet", "10.10.0.0/16"),
+                    rateZone = zone,
+                    defaultUsdRateMicros = usdMicros,
+                    defaultSarRateMicros = sarMicros,
+                    updatedAt = updatedAt
                 )
             } else {
                 NetworkConfig()
@@ -144,6 +163,10 @@ class NetworkRepository(private val context: Context) : com.example.data.local.d
             put("primaryDns", newConfig.primaryDns)
             put("secondaryDns", newConfig.secondaryDns)
             put("approvedSubnet", newConfig.approvedSubnet)
+            put("rateZone", newConfig.rateZone.name)
+            put("defaultUsdRateMicros", newConfig.defaultUsdRateMicros)
+            put("defaultSarRateMicros", newConfig.defaultSarRateMicros)
+            put("updatedAt", newConfig.updatedAt)
         }
         configFile.writeText(json.toString(2))
         _config.value = newConfig

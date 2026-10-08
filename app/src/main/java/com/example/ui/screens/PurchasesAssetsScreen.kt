@@ -55,12 +55,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.filled.CurrencyExchange
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -92,7 +94,6 @@ import com.example.data.local.entity.DocumentItemEntity
 import com.example.ui.components.AmountSemanticType
 import com.example.ui.components.AmountText
 import com.example.ui.components.CurrencySelector
-import com.example.ui.components.ExchangeRateCard
 import com.example.ui.components.SectionHeader
 import com.example.ui.components.StatusChip
 import com.example.domain.usecase.ExchangeRateResolver
@@ -107,12 +108,18 @@ import com.example.ui.theme.CyberDarkSurface
 import com.example.ui.theme.MikroTikNavyLight
 import com.example.ui.theme.MikroTikPrimary
 import com.example.ui.theme.StatusWarning
+import com.example.ui.theme.StatusOnline
 import com.example.ui.theme.TextMutedDark
 import com.example.ui.theme.TextPrimaryDark
 import com.example.ui.theme.TextSecondaryDark
 import com.example.ui.theme.SemanticExpenseRed
 import com.example.ui.theme.SemanticIncomeGreen
 import com.example.ui.viewmodel.AppViewModel
+import com.example.data.network.NetworkConfig
+import androidx.compose.material.icons.filled.Calculate
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Edit
 
 @Composable
 fun PurchasesAssetsScreen(
@@ -376,10 +383,12 @@ fun PurchasesAssetsScreen(
 
     // New Purchase Sheet
     if (showNewPurchaseSheet) {
+        val networkConfig by viewModel.networkRepository.config.collectAsState()
         NewPurchaseBottomSheet(
             parties = parties,
             packages = packages,
             resolver = viewModel.exchangeRateResolver,
+            networkConfig = networkConfig,
             onDismiss = { showNewPurchaseSheet = false },
             onSubmit = { vendorId, currency, rate, items, notes ->
                 viewModel.postPurchaseInvoice(
@@ -388,6 +397,7 @@ fun PurchasesAssetsScreen(
                     exchangeRate = rate,
                     items = items,
                     notes = notes,
+                    rateZone = networkConfig.rateZone,
                     onSuccess = { showNewPurchaseSheet = false }
                 )
             }
@@ -697,39 +707,72 @@ fun NewPurchaseBottomSheet(
     parties: List<com.example.data.local.entity.PartyEntity>,
     packages: List<CardPackageEntity> = emptyList(),
     resolver: ExchangeRateResolver? = null,
+    networkConfig: NetworkConfig? = null,
     onDismiss: () -> Unit,
     onSubmit: (vendorId: String, currency: CurrencyCode, rate: ExchangeRate, items: List<PurchaseItemSpec>, notes: String) -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val effectiveConfig = networkConfig ?: remember {
+        com.example.data.network.NetworkRepository(context).config.value
+    }
     val effectiveResolver = resolver ?: remember { ExchangeRateResolver(AppDatabase.getInstance(context)) }
     val vendors = remember(parties) { parties.filter { it.isVendor } }
     var vendorSearchQuery by rememberSaveable { mutableStateOf("") }
     var selectedVendorId by rememberSaveable {
         mutableStateOf(vendors.firstOrNull()?.id ?: AppDatabase.WALK_IN_CASH_PARTY_ID)
     }
-    var selectedCurrency by rememberSaveable { mutableStateOf(CurrencyCode.USD) }
-    var selectedZone by rememberSaveable { mutableStateOf(RateZone.SANAA) }
-    var resolvedRate by remember { mutableStateOf<ExchangeRate?>(null) }
-    var manualRateOverride by remember { mutableStateOf<ExchangeRate?>(null) }
-    var showManualRateDialog by remember { mutableStateOf(false) }
-    var manualRateInputText by remember { mutableStateOf("") }
-    var manualOverrideReason by remember { mutableStateOf("") }
+    var selectedCurrency by rememberSaveable { mutableStateOf(CurrencyCode.FUNCTIONAL) }
+    var selectedZone by rememberSaveable { mutableStateOf(effectiveConfig.rateZone) }
+    var rateInputText by rememberSaveable { mutableStateOf("1.0") }
+    var isRateManuallyEdited by rememberSaveable { mutableStateOf(false) }
     val today = remember { java.time.LocalDate.now().toEpochDay() }
 
-    LaunchedEffect(selectedCurrency, selectedZone) {
-        manualRateOverride = null
-        if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
-            resolvedRate = ExchangeRate.parity(CurrencyCode.FUNCTIONAL)
-        } else {
-            try {
-                resolvedRate = effectiveResolver.resolve(selectedCurrency, today, selectedZone)
-            } catch (e: Exception) {
-                resolvedRate = effectiveResolver.resolveOrNull(selectedCurrency, today, selectedZone)
+    LaunchedEffect(selectedCurrency, selectedZone, effectiveConfig) {
+        when (selectedCurrency) {
+            CurrencyCode.YER -> {
+                rateInputText = "1.0"
+                isRateManuallyEdited = false
+            }
+            CurrencyCode.USD -> {
+                val defaultRateMicros = if (selectedZone == effectiveConfig.rateZone) {
+                    effectiveConfig.defaultUsdRateMicros
+                } else {
+                    effectiveResolver.resolveOrNull(CurrencyCode.USD, today, selectedZone)?.rateMicros
+                        ?: if (selectedZone == RateZone.ADEN) 1_600_000_000L else 535_000_000L
+                }
+                rateInputText = ExchangeRate.formatRateMicros(defaultRateMicros)
+                isRateManuallyEdited = false
+            }
+            CurrencyCode.SAR -> {
+                val defaultRateMicros = if (selectedZone == effectiveConfig.rateZone) {
+                    effectiveConfig.defaultSarRateMicros
+                } else {
+                    effectiveResolver.resolveOrNull(CurrencyCode.SAR, today, selectedZone)?.rateMicros
+                        ?: if (selectedZone == RateZone.ADEN) 420_000_000L else 140_500_000L
+                }
+                rateInputText = ExchangeRate.formatRateMicros(defaultRateMicros)
+                isRateManuallyEdited = false
             }
         }
     }
 
-    val effectiveRate = manualRateOverride ?: resolvedRate
+    val parsedRateMicros: Long = if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
+        ExchangeRate.SCALE_MICROS
+    } else {
+        ExchangeRate.parseRateFromUserInput(rateInputText) ?: when (selectedCurrency) {
+            CurrencyCode.USD -> effectiveConfig.defaultUsdRateMicros
+            CurrencyCode.SAR -> effectiveConfig.defaultSarRateMicros
+            else -> ExchangeRate.SCALE_MICROS
+        }
+    }
+
+    val effectiveRate = remember(selectedCurrency, parsedRateMicros) {
+        ExchangeRate(
+            fromCurrency = selectedCurrency,
+            toCurrency = CurrencyCode.FUNCTIONAL,
+            rateMicros = parsedRateMicros
+        )
+    }
 
     // New item inputs & package dropdown state
     var itemDesc by rememberSaveable { mutableStateOf("") }
@@ -754,7 +797,7 @@ fun NewPurchaseBottomSheet(
     val totalYerMinor = if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
         totalForeignMinor
     } else {
-        effectiveRate?.convert(totalForeignMinor) ?: 0L
+        effectiveRate.convert(totalForeignMinor)
     }
 
     ModalBottomSheet(
@@ -864,7 +907,7 @@ fun NewPurchaseBottomSheet(
                                     modifier = Modifier
                                         .clickable {
                                             selectedZone = if (selectedZone == RateZone.SANAA) RateZone.ADEN else RateZone.SANAA
-                                            manualRateOverride = null
+                                            isRateManuallyEdited = false
                                         }
                                         .testTag("rate_zone_toggle_badge")
                                 ) {
@@ -933,29 +976,178 @@ fun NewPurchaseBottomSheet(
                             }
                         }
 
-                        // Currency Selector Chips
-                        Text("العملة المعتمدة للفاتورة:", fontSize = 12.sp, color = TextSecondaryDark)
+                        // Currency Selection (Dropdown + Quick Selector)
+                        Text("العملة المعتمدة للفاتورة:", fontSize = 12.sp, color = TextSecondaryDark, fontWeight = FontWeight.SemiBold)
+
+                        var currencyDropdownExpanded by remember { mutableStateOf(false) }
+                        val availableCurrencies = listOf(CurrencyCode.YER, CurrencyCode.SAR, CurrencyCode.USD)
+
+                        ExposedDropdownMenuBox(
+                            expanded = currencyDropdownExpanded,
+                            onExpandedChange = { currencyDropdownExpanded = it },
+                            modifier = Modifier.fillMaxWidth().testTag("dropdown_currency_selector")
+                        ) {
+                            OutlinedTextField(
+                                value = "${selectedCurrency.name} (${selectedCurrency.arabicName} - ${selectedCurrency.symbol})",
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("قائمة العملات المتاحة") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = currencyDropdownExpanded) },
+                                shape = RoundedCornerShape(12.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = MikroTikCyan,
+                                    unfocusedBorderColor = CyberBorder
+                                ),
+                                modifier = Modifier.menuAnchor().fillMaxWidth()
+                            )
+                            ExposedDropdownMenu(
+                                expanded = currencyDropdownExpanded,
+                                onDismissRequest = { currencyDropdownExpanded = false }
+                            ) {
+                                availableCurrencies.forEach { curr ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    "${curr.name} - ${curr.arabicName} (${curr.symbol})",
+                                                    fontWeight = if (selectedCurrency == curr) FontWeight.Bold else FontWeight.Normal,
+                                                    color = if (selectedCurrency == curr) MikroTikCyan else TextPrimaryDark
+                                                )
+                                                if (selectedCurrency == curr) {
+                                                    Icon(Icons.Default.Check, contentDescription = null, tint = MikroTikCyan, modifier = Modifier.size(16.dp))
+                                                }
+                                            }
+                                        },
+                                        onClick = {
+                                            selectedCurrency = curr
+                                            currencyDropdownExpanded = false
+                                        },
+                                        modifier = Modifier.testTag("dropdown_currency_${curr.name}")
+                                    )
+                                }
+                            }
+                        }
+
                         CurrencySelector(
                             selectedCurrency = selectedCurrency,
                             onCurrencySelected = { selectedCurrency = it }
                         )
 
-                        // Rate Details Card if foreign
+                        // Rate Details Card if foreign, or read-only parity notice if YER
                         if (selectedCurrency != CurrencyCode.FUNCTIONAL) {
-                            ExchangeRateCard(
-                                currency = selectedCurrency,
-                                rate = effectiveRate,
-                                zone = selectedZone,
-                                onZoneToggle = {
-                                    selectedZone = if (selectedZone == RateZone.SANAA) RateZone.ADEN else RateZone.SANAA
-                                    manualRateOverride = null
-                                },
-                                onEditRateClick = {
-                                    manualRateInputText = effectiveRate?.let { ExchangeRate.formatRateMicros(it.rateMicros) } ?: ""
-                                    manualOverrideReason = "سعر صراف معتمد / تقلبات سوق"
-                                    showManualRateDialog = true
+                            Surface(
+                                color = CyberDarkCardElevated,
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, MikroTikCyan.copy(alpha = 0.4f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.CurrencyExchange, contentDescription = null, tint = MikroTikCyan, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                "سعر الصرف (1 ${selectedCurrency.name} مقابل YER):",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = TextPrimaryDark
+                                            )
+                                        }
+                                        Surface(
+                                            color = MikroTikCyan.copy(alpha = 0.15f),
+                                            shape = RoundedCornerShape(6.dp),
+                                            modifier = Modifier.clickable {
+                                                selectedZone = if (selectedZone == RateZone.SANAA) RateZone.ADEN else RateZone.SANAA
+                                            }
+                                        ) {
+                                            Text(
+                                                if (selectedZone == RateZone.SANAA) "نطاق صنعاء (اضغط للتبديل)" else "نطاق عدن (اضغط للتبديل)",
+                                                fontSize = 11.sp,
+                                                color = MikroTikCyan,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+
+                                    OutlinedTextField(
+                                        value = rateInputText,
+                                        onValueChange = {
+                                            rateInputText = it
+                                            isRateManuallyEdited = true
+                                        },
+                                        label = { Text("سعر الصرف بالريال اليمني (قابل للتعديل الاستثنائي)") },
+                                        trailingIcon = {
+                                            if (isRateManuallyEdited) {
+                                                IconButton(
+                                                    onClick = {
+                                                        rateInputText = when (selectedCurrency) {
+                                                            CurrencyCode.USD -> ExchangeRate.formatRateMicros(effectiveConfig.defaultUsdRateMicros)
+                                                            CurrencyCode.SAR -> ExchangeRate.formatRateMicros(effectiveConfig.defaultSarRateMicros)
+                                                            else -> "1.0"
+                                                        }
+                                                        isRateManuallyEdited = false
+                                                    }
+                                                ) {
+                                                    Icon(Icons.Default.Refresh, contentDescription = "استعادة الافتراضي من هوية الشبكة", tint = MikroTikCyan, modifier = Modifier.size(16.dp))
+                                                }
+                                            }
+                                        },
+                                        shape = RoundedCornerShape(10.dp),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedBorderColor = MikroTikCyan,
+                                            unfocusedBorderColor = CyberBorder
+                                        ),
+                                        modifier = Modifier.fillMaxWidth().testTag("input_purchase_fx_rate")
+                                    )
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = if (isRateManuallyEdited) "سعر صرف مخصص لهذه الفاتورة فقط" else "مستمد تلقائياً من هوية الشبكة (${if (selectedZone == RateZone.SANAA) "صنعاء" else "عدن"})",
+                                            fontSize = 11.sp,
+                                            color = if (isRateManuallyEdited) StatusWarning else TextSecondaryDark
+                                        )
+                                        Text(
+                                            text = "1 ${selectedCurrency.name} = ${ExchangeRate.formatRateMicros(parsedRateMicros)} YER",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MikroTikCyan
+                                        )
+                                    }
                                 }
-                            )
+                            }
+                        } else {
+                            Surface(
+                                color = CyberDarkCardElevated,
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, CyberBorder),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.Lock, contentDescription = null, tint = StatusOnline, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        "عملة الأساس المحلية (YER) - سعر الصرف ثابت 1.0 (لا يتطلب تحويل)",
+                                        fontSize = 12.sp,
+                                        color = StatusOnline
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -1094,7 +1286,12 @@ fun NewPurchaseBottomSheet(
                                                 selectedPackageId = pkg.id
                                                 itemDesc = pkg.name
                                                 if (pkg.wholesalePriceMinor > 0L) {
-                                                    itemPriceText = (pkg.wholesalePriceMinor / 100L).toString()
+                                                    if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
+                                                        itemPriceText = (pkg.wholesalePriceMinor / 100L).toString()
+                                                    } else {
+                                                        val foreignMinor = (pkg.wholesalePriceMinor * 10_000L) / effectiveRate.rateMicros
+                                                        itemPriceText = (foreignMinor / 100L).coerceAtLeast(1L).toString()
+                                                    }
                                                 }
                                                 isFixedAsset = false
                                                 packageDropdownExpanded = false
@@ -1179,6 +1376,8 @@ fun NewPurchaseBottomSheet(
                         val enteredQty = itemQtyText.toIntOrNull() ?: 0
                         val enteredPrice = Money.parseFromUserInput(itemPriceText, selectedCurrency)?.minor ?: 0L
                         val rowCalculatedMinor = enteredQty * enteredPrice
+                        val rowCalculatedYerMinor = if (selectedCurrency == CurrencyCode.FUNCTIONAL) rowCalculatedMinor else effectiveRate.convert(rowCalculatedMinor)
+
                         if (rowCalculatedMinor > 0L) {
                             Surface(
                                 color = CyberDarkCardElevated,
@@ -1191,12 +1390,21 @@ fun NewPurchaseBottomSheet(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text("إجمالي البند المتوقع:", fontSize = 11.sp, color = TextSecondaryDark)
-                                    Text(
-                                        Money(rowCalculatedMinor, selectedCurrency).format(),
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 12.sp,
-                                        color = MikroTikCyan
-                                    )
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Text(
+                                            Money(rowCalculatedMinor, selectedCurrency).format(),
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            color = MikroTikCyan
+                                        )
+                                        if (selectedCurrency != CurrencyCode.FUNCTIONAL) {
+                                            Text(
+                                                "≈ ${Money(rowCalculatedYerMinor, CurrencyCode.FUNCTIONAL).format()}",
+                                                fontSize = 11.sp,
+                                                color = StatusOnline
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1278,6 +1486,7 @@ fun NewPurchaseBottomSheet(
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 itemsList.forEachIndexed { idx, itm ->
                                     val rowTotal = itm.quantity * itm.unitPriceMinor
+                                    val rowTotalYer = if (selectedCurrency == CurrencyCode.FUNCTIONAL) rowTotal else effectiveRate.convert(rowTotal)
                                     Surface(
                                         color = CyberDarkCardElevated,
                                         shape = RoundedCornerShape(10.dp),
@@ -1300,16 +1509,38 @@ fun NewPurchaseBottomSheet(
                                                     }
                                                 }
                                                 Text(
-                                                    "${itm.quantity} قطعة × ${Money(itm.unitPriceMinor, selectedCurrency).format()} = ${Money(rowTotal, selectedCurrency).format()}",
+                                                    if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
+                                                        "${itm.quantity} قطعة × ${Money(itm.unitPriceMinor, selectedCurrency).format()} = ${Money(rowTotal, selectedCurrency).format()}"
+                                                    } else {
+                                                        "${itm.quantity} قطعة × ${Money(itm.unitPriceMinor, selectedCurrency).format()} = ${Money(rowTotal, selectedCurrency).format()} (المعادل: ${Money(rowTotalYer, CurrencyCode.FUNCTIONAL).format()})"
+                                                    },
                                                     fontSize = 11.sp,
                                                     color = TextSecondaryDark
                                                 )
                                             }
-                                            IconButton(
-                                                onClick = { itemsList.removeAt(idx) },
-                                                modifier = Modifier.testTag("btn_delete_item_$idx")
-                                            ) {
-                                                Icon(Icons.Default.Delete, contentDescription = "حذف", tint = SemanticExpenseRed, modifier = Modifier.size(18.dp))
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                IconButton(
+                                                    onClick = {
+                                                        val itmToEdit = itemsList.removeAt(idx)
+                                                        itemDesc = itmToEdit.description
+                                                        val matchedPkg = packages.find { it.name == itmToEdit.description }
+                                                        selectedPackage = matchedPkg
+                                                        selectedPackageId = matchedPkg?.id ?: ""
+                                                        itemQtyText = itmToEdit.quantity.toString()
+                                                        itemPriceText = (itmToEdit.unitPriceMinor / 100L).toString()
+                                                        isFixedAsset = itmToEdit.isAsset
+                                                        usefulMonthsText = itmToEdit.usefulLifeMonths.toString()
+                                                    },
+                                                    modifier = Modifier.testTag("btn_edit_item_$idx")
+                                                ) {
+                                                    Icon(Icons.Default.Edit, contentDescription = "تعديل", tint = MikroTikCyan, modifier = Modifier.size(18.dp))
+                                                }
+                                                IconButton(
+                                                    onClick = { itemsList.removeAt(idx) },
+                                                    modifier = Modifier.testTag("btn_delete_item_$idx")
+                                                ) {
+                                                    Icon(Icons.Default.Delete, contentDescription = "حذف", tint = SemanticExpenseRed, modifier = Modifier.size(18.dp))
+                                                }
                                             }
                                         }
                                     }
@@ -1417,14 +1648,14 @@ fun NewPurchaseBottomSheet(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                val canSubmit = itemsList.isNotEmpty() && (selectedCurrency == CurrencyCode.FUNCTIONAL || effectiveRate != null)
+                val canSubmit = itemsList.isNotEmpty()
                 Button(
                     onClick = {
                         if (canSubmit) {
                             val rate = if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
                                 ExchangeRate.parity(CurrencyCode.FUNCTIONAL)
                             } else {
-                                effectiveRate ?: error("Exchange rate not resolved for $selectedCurrency")
+                                effectiveRate
                             }
                             onSubmit(selectedVendorId, selectedCurrency, rate, itemsList.toList(), notes)
                         }
@@ -1461,53 +1692,5 @@ fun NewPurchaseBottomSheet(
                 }
             }
         }
-    }
-
-    if (showManualRateDialog) {
-        AlertDialog(
-            onDismissRequest = { showManualRateDialog = false },
-            title = { Text("تعديل سعر الصرف يدوياً", fontWeight = FontWeight.Bold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        "أدخل سعر الصرف المعتمد لـ 1 ${selectedCurrency.name} بالريال اليمني (YER) لتسعيرة ${if (selectedZone == RateZone.SANAA) "صنعاء" else "عدن"}:",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    OutlinedTextField(
-                        value = manualRateInputText,
-                        onValueChange = { manualRateInputText = it },
-                        label = { Text("سعر الصرف (مثال: 535.50 أو 1900)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().testTag("input_manual_exchange_rate")
-                    )
-                    OutlinedTextField(
-                        value = manualOverrideReason,
-                        onValueChange = { manualOverrideReason = it },
-                        label = { Text("سبب التعديل اليدوي") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().testTag("input_manual_rate_reason")
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val parsed = ExchangeRate.parseRateFromUserInput(manualRateInputText)
-                        if (parsed != null && parsed > 0L) {
-                            manualRateOverride = ExchangeRate(selectedCurrency, CurrencyCode.FUNCTIONAL, parsed)
-                            showManualRateDialog = false
-                        }
-                    },
-                    modifier = Modifier.testTag("btn_confirm_manual_rate")
-                ) {
-                    Text("تطبيق السعر")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showManualRateDialog = false }) {
-                    Text("إلغاء")
-                }
-            }
-        )
     }
 }
