@@ -24,8 +24,34 @@ data class IncomeStatementReport(
     val depreciationExpenseMinor: Long,
     val realizedFxGainMinor: Long,
     val realizedFxLossMinor: Long,
+    val unrealizedFxGainMinor: Long = 0L,
+    val unrealizedFxLossMinor: Long = 0L,
     val netProfitMinor: Long,
     val allLineDetails: List<IncomeStatementRow>
+) {
+    val totalFxNetMinor: Long
+        get() = (realizedFxGainMinor + unrealizedFxGainMinor) - (realizedFxLossMinor + unrealizedFxLossMinor)
+}
+
+data class DualCurrencyBalanceRow(
+    val accountCode: String,
+    val accountName: String,
+    val currency: String,
+    val origDebitMinor: Long,
+    val origCreditMinor: Long,
+    val netOrigMinor: Long,
+    val baseDebitMinor: Long,
+    val baseCreditMinor: Long,
+    val netBaseMinor: Long,
+    val isDebitNormal: Boolean
+)
+
+data class DualCurrencyTrialBalanceReport(
+    val asOfDateEpochDay: Long?,
+    val rows: List<DualCurrencyBalanceRow>,
+    val totalBaseDebitMinor: Long,
+    val totalBaseCreditMinor: Long,
+    val isBalanced: Boolean
 )
 
 data class BalanceSheetReport(
@@ -81,6 +107,8 @@ class FinancialStatementsUseCase(private val db: AppDatabase) {
         var depreciationExp = 0L
         var realizedFxGain = 0L
         var realizedFxLoss = 0L
+        var unrealizedFxGain = 0L
+        var unrealizedFxLoss = 0L
 
         rows.forEach { row ->
             when (row.accountCode) {
@@ -95,6 +123,8 @@ class FinancialStatementsUseCase(private val db: AppDatabase) {
                 AccountConstants.DEPRECIATION_EXPENSE -> depreciationExp += row.netAmountMinor
                 AccountConstants.REALIZED_FX_GAIN -> realizedFxGain += row.netAmountMinor
                 AccountConstants.REALIZED_FX_LOSS -> realizedFxLoss += row.netAmountMinor
+                AccountConstants.UNREALIZED_FX_GAIN -> unrealizedFxGain += row.netAmountMinor
+                AccountConstants.UNREALIZED_FX_LOSS -> unrealizedFxLoss += row.netAmountMinor
                 else -> {
                     // Include any custom 4xxx or 5xxx accounts
                     if (row.accountCode.startsWith("4")) {
@@ -109,7 +139,9 @@ class FinancialStatementsUseCase(private val db: AppDatabase) {
         val netRevenue = (cardRevenue + serviceRevenue) - salesReturns
         val grossProfit = netRevenue - directIspCost
         val totalOperatingExp = operatingExp + maintenanceExp + salariesExp + miscExp
-        val netProfit = grossProfit - totalOperatingExp - depreciationExp + realizedFxGain - realizedFxLoss
+        val totalFxGain = realizedFxGain + unrealizedFxGain
+        val totalFxLoss = realizedFxLoss + unrealizedFxLoss
+        val netProfit = grossProfit - totalOperatingExp - depreciationExp + totalFxGain - totalFxLoss
 
         return IncomeStatementReport(
             startDateEpochDay = startDateEpochDay,
@@ -128,8 +160,37 @@ class FinancialStatementsUseCase(private val db: AppDatabase) {
             depreciationExpenseMinor = depreciationExp,
             realizedFxGainMinor = realizedFxGain,
             realizedFxLossMinor = realizedFxLoss,
+            unrealizedFxGainMinor = unrealizedFxGain,
+            unrealizedFxLossMinor = unrealizedFxLoss,
             netProfitMinor = netProfit,
             allLineDetails = rows
+        )
+    }
+
+    suspend fun generateDualCurrencyTrialBalance(asOfDateEpochDay: Long? = null): DualCurrencyTrialBalanceReport {
+        val lines = db.journalDao().getTrialBalanceSync()
+        val dualRows = lines.map { row ->
+            DualCurrencyBalanceRow(
+                accountCode = row.accountCode,
+                accountName = row.accountName,
+                currency = row.currency,
+                origDebitMinor = row.origDebitMinor,
+                origCreditMinor = row.origCreditMinor,
+                netOrigMinor = row.netOrigBalanceMinor,
+                baseDebitMinor = row.totalDebitMinor,
+                baseCreditMinor = row.totalCreditMinor,
+                netBaseMinor = row.netBalanceMinor,
+                isDebitNormal = row.isDebitNormal
+            )
+        }
+        val totalBaseDebit = lines.sumOf { it.totalDebitMinor }
+        val totalBaseCredit = lines.sumOf { it.totalCreditMinor }
+        return DualCurrencyTrialBalanceReport(
+            asOfDateEpochDay = asOfDateEpochDay,
+            rows = dualRows,
+            totalBaseDebitMinor = totalBaseDebit,
+            totalBaseCreditMinor = totalBaseCredit,
+            isBalanced = (totalBaseDebit == totalBaseCredit)
         )
     }
 

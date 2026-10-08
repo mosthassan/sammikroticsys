@@ -1060,6 +1060,149 @@ class LedgerWriter(
     }
 
     /**
+     * IAS 21 Periodic Revaluation (D.1):
+     * Revalues foreign monetary items (1101/1102 Treasury, 1201 Receivables, 2101 Payables).
+     *
+     * Invariant: Non-monetary items (Fixed Assets 1501, Inventory 1401, Partner Capital 3101) MUST NEVER be revalued.
+     *
+     * Delta calculation:
+     * - For Assets (1101/1102 Treasury, 1201 Receivables):
+     *   delta = (Current Market Rate in YER * foreign balance) - Book YER Balance
+     *   If delta > 0: Gain -> DR Monetary Account, CR 4902 Unrealized FX Gain
+     *   If delta < 0: Loss -> DR 5902 Unrealized FX Loss, CR Monetary Account
+     * - For Liabilities (2101 Payables):
+     *   delta = Book YER Balance - (Current Market Rate in YER * foreign balance)
+     *   If delta > 0: Gain -> DR 2101 Payables, CR 4902 Unrealized FX Gain
+     *   If delta < 0: Loss -> DR 5902 Unrealized FX Loss, CR 2101 Payables
+     *
+     * Revaluation document type: PERIODIC_REVALUATION (REV).
+     */
+    suspend fun postPeriodicRevaluation(
+        accountCode: String,
+        partyId: String? = null,
+        treasuryId: String? = null,
+        fiscalYear: Int,
+        dateEpochDay: Long,
+        foreignCurrency: CurrencyCode,
+        exchangeRate: ExchangeRate,
+        rateZone: RateZone = RateZone.SANAA,
+        rateSource: RateSource = RateSource.SYSTEM_DAILY,
+        notes: String? = null,
+        idempotencyKey: String? = null
+    ): DocumentEntity? = db.withTransaction {
+        validatePeriodIsOpen(dateEpochDay)
+        if (idempotencyKey != null) {
+            val existingDocId = db.idempotencyDao().getDocIdForKey(idempotencyKey)
+            if (existingDocId != null) return@withTransaction db.documentDao().getDocumentById(existingDocId)
+        }
+
+        // Strict Invariant: Non-monetary items MUST NEVER be revalued
+        val monetaryAccounts = setOf(
+            AccountConstants.CASH_VAULT,
+            AccountConstants.BANKS_WALLETS,
+            AccountConstants.ACCOUNTS_RECEIVABLE,
+            AccountConstants.ACCOUNTS_PAYABLE
+        )
+        require(accountCode in monetaryAccounts) {
+            "IAS 21 Violation: Account $accountCode is non-monetary and cannot be revalued. Non-monetary items (Fixed Assets 1501, Inventory 1401, Partner Capital 3101) must never be revalued under IAS 21."
+        }
+        require(foreignCurrency != CurrencyCode.FUNCTIONAL) {
+            "Cannot revalue functional currency (${CurrencyCode.FUNCTIONAL.name})"
+        }
+        validateExchangeRateGuardrail(foreignCurrency, exchangeRate)
+
+        val foreignBalance: Long
+        val bookYerBalance: Long
+        val deltaMinor: Long
+
+        when (accountCode) {
+            AccountConstants.CASH_VAULT, AccountConstants.BANKS_WALLETS -> {
+                require(!treasuryId.isNullOrBlank()) { "Treasury account requires an explicit treasuryId" }
+                val treasury = db.treasuryDao().getTreasuryById(treasuryId)
+                    ?: error("Treasury $treasuryId not found")
+                require(treasury.currency == foreignCurrency.name) {
+                    "Treasury currency (${treasury.currency}) does not match revaluation currency (${foreignCurrency.name})"
+                }
+                foreignBalance = db.journalDao().getNetOrigBalanceForTreasury(treasuryId)
+                bookYerBalance = db.journalDao().getNetDebitBalanceForTreasury(treasuryId)
+                val currentMarketYer = exchangeRate.convert(foreignBalance)
+                deltaMinor = currentMarketYer - bookYerBalance
+            }
+            AccountConstants.ACCOUNTS_RECEIVABLE -> {
+                require(!partyId.isNullOrBlank()) { "Accounts Receivable requires an explicit partyId" }
+                foreignBalance = db.journalDao().getPartyReceivableOrigBalance(partyId, foreignCurrency.name)
+                bookYerBalance = db.journalDao().getPartyReceivableBaseBalanceByCurrency(partyId, foreignCurrency.name)
+                val currentMarketYer = exchangeRate.convert(foreignBalance)
+                deltaMinor = currentMarketYer - bookYerBalance
+            }
+            AccountConstants.ACCOUNTS_PAYABLE -> {
+                require(!partyId.isNullOrBlank()) { "Accounts Payable requires an explicit partyId" }
+                foreignBalance = db.journalDao().getPartyPayableOrigBalance(partyId, foreignCurrency.name)
+                bookYerBalance = db.journalDao().getPartyPayableBaseBalanceByCurrency(partyId, foreignCurrency.name)
+                val currentMarketYer = exchangeRate.convert(foreignBalance)
+                // For liabilities: gain if book > market, loss if market > book
+                deltaMinor = bookYerBalance - currentMarketYer
+            }
+            else -> error("Unsupported monetary account $accountCode")
+        }
+
+        // Zero delta or zero foreign balance exemption
+        if (deltaMinor == 0L || foreignBalance == 0L) {
+            return@withTransaction null
+        }
+
+        val memo = notes ?: when {
+            treasuryId != null -> "إعادة تقييم دوري لخزينة $treasuryId بسعر ${exchangeRate.rateMicros / ExchangeRate.SCALE_MICROS} ر.ي/$foreignCurrency"
+            accountCode == AccountConstants.ACCOUNTS_RECEIVABLE -> "إعادة تقييم دوري لذمم مدينة للعميل $partyId بسعر ${exchangeRate.rateMicros / ExchangeRate.SCALE_MICROS} ر.ي/$foreignCurrency"
+            else -> "إعادة تقييم دوري لذمم دائنة للمورد $partyId بسعر ${exchangeRate.rateMicros / ExchangeRate.SCALE_MICROS} ر.ي/$foreignCurrency"
+        }
+
+        val draft = PostingRules.createPeriodicRevaluationDraft(
+            accountCode = accountCode,
+            partyId = partyId,
+            treasuryId = treasuryId,
+            deltaMinor = deltaMinor,
+            currency = foreignCurrency,
+            exchangeRate = exchangeRate,
+            dateEpochDay = dateEpochDay,
+            memo = memo
+        )
+
+        val docNumber = allocateNextDocNumber(DocumentType.PERIODIC_REVALUATION.name, fiscalYear)
+        val docId = UuidUtils.newTimeOrderedId()
+        val absDelta = Math.abs(deltaMinor)
+
+        val docEntity = DocumentEntity(
+            id = docId,
+            type = DocumentType.PERIODIC_REVALUATION.name,
+            fiscalYear = fiscalYear,
+            docNumber = docNumber,
+            partyId = partyId ?: AppDatabase.WALK_IN_CASH_PARTY_ID,
+            dateEpochDay = dateEpochDay,
+            currency = foreignCurrency.name,
+            exchangeRateMicros = exchangeRate.rateMicros,
+            rateZone = rateZone.name,
+            rateSource = rateSource.name,
+            totalMinor = absDelta,
+            totalBaseMinor = absDelta,
+            status = DocumentStatus.POSTED.name,
+            notes = memo
+        )
+
+        db.documentDao().insertDocument(docEntity)
+        persistJournalDraft(docId, docNumber, draft)
+
+        recordAuditLog("DOCUMENT", docId, "POST_REVALUATION", null, "Posted periodic revaluation #$docNumber for $accountCode, delta: $deltaMinor YER")
+        idempotencyKey?.let { db.idempotencyDao().insertKey(IdempotencyKeyEntity(it, docId)) }
+
+        if (enableInvariantValidation) {
+            invariants.verifyAll()
+        }
+
+        docEntity
+    }
+
+    /**
      * Voids a posted document by generating an exact compensatory REVERSAL entry.
      * Original entry remains forever in the ledger.
      */

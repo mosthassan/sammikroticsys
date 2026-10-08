@@ -305,11 +305,20 @@ fun ChartOfAccountsScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    AmountText(
-                        money = Money(netMinor, CurrencyCode.FUNCTIONAL),
-                        semanticType = if (acc.isDebitNormal) AmountSemanticType.INCOME else AmountSemanticType.EXPENSE,
-                        fontSize = 13
-                    )
+                    Column(horizontalAlignment = Alignment.End) {
+                        AmountText(
+                            money = Money(netMinor, CurrencyCode.FUNCTIONAL),
+                            semanticType = if (acc.isDebitNormal) AmountSemanticType.INCOME else AmountSemanticType.EXPENSE,
+                            fontSize = 13
+                        )
+                        if (bal != null && bal.currency != "YER" && bal.netOrigBalanceMinor != 0L) {
+                            Text(
+                                text = "(${Money(bal.netOrigBalanceMinor, CurrencyCode.fromString(bal.currency)).format()})",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
                 }
             }
         }

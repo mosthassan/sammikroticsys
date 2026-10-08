@@ -357,8 +357,8 @@ private fun IncomeStatementView(
                 }
             }
 
-            // Section 4: FX Gains / Losses
-            if (report.realizedFxGainMinor > 0 || report.realizedFxLossMinor > 0) {
+            // Section 4: FX Gains / Losses (IAS 21 Realized & Unrealized FX)
+            if (report.realizedFxGainMinor > 0 || report.realizedFxLossMinor > 0 || report.unrealizedFxGainMinor > 0 || report.unrealizedFxLossMinor > 0) {
                 item {
                     Card(
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -366,13 +366,21 @@ private fun IncomeStatementView(
                         modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
                     ) {
                         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            SectionHeader(title = "4. فروق العملة المحققة (IAS 21 Realized FX)")
+                            SectionHeader(title = "4. فروق أسعار صرف العملات (IAS 21 FX Effects)")
                             if (report.realizedFxGainMinor > 0) {
-                                ReportLineRow("أرباح فروق صرف العملة (4901)", report.realizedFxGainMinor, isPositive = true)
+                                ReportLineRow("أرباح فروق صرف العملة المحققة (4901)", report.realizedFxGainMinor, isPositive = true)
                             }
                             if (report.realizedFxLossMinor > 0) {
-                                ReportLineRow("خسائر فروق صرف العملة (5901)", report.realizedFxLossMinor, isPositive = false)
+                                ReportLineRow("خسائر فروق صرف العملة المحققة (5901)", report.realizedFxLossMinor, isPositive = false)
                             }
+                            if (report.unrealizedFxGainMinor > 0) {
+                                ReportLineRow("أرباح تقييم العملة غير المحققة (4902)", report.unrealizedFxGainMinor, isPositive = true)
+                            }
+                            if (report.unrealizedFxLossMinor > 0) {
+                                ReportLineRow("خسائر تقييم العملة غير المحققة (5902)", report.unrealizedFxLossMinor, isPositive = false)
+                            }
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                            ReportSubtotalRow("صافي أثر فروق العملات (Net FX)", report.totalFxNetMinor, isHighlight = true, isPositive = report.totalFxNetMinor >= 0)
                         }
                     }
                 }

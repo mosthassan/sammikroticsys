@@ -213,14 +213,16 @@ abstract class AppDatabase : RoomDatabase() {
                 AccountEntity(AccountConstants.CARD_SALES_REVENUE, "إيرادات مبيعات الكروت", "REVENUE", isDebitNormal = false, isLocked = true),
                 AccountEntity(AccountConstants.SALES_RETURNS, "مردودات ومسموحات المبيعات", "REVENUE", isDebitNormal = true, isLocked = true),
                 AccountEntity(AccountConstants.DIRECT_SERVICE_REVENUE, "إيرادات الاشتراكات المباشرة والخدمات", "REVENUE", isDebitNormal = false, isLocked = true),
-                AccountEntity(AccountConstants.REALIZED_FX_GAIN, "أرباح فروق العملة", "REVENUE", isDebitNormal = false, isLocked = true),
+                AccountEntity(AccountConstants.REALIZED_FX_GAIN, "أرباح فروق العملة المحققة", "REVENUE", isDebitNormal = false, isLocked = true),
+                AccountEntity(AccountConstants.UNREALIZED_FX_GAIN, "أرباح فروق العملة غير المحققة (إعادة التقييم)", "REVENUE", isDebitNormal = false, isLocked = true),
                 AccountEntity(AccountConstants.DIRECT_ISP_SERVICE_COST, "تكلفة الخدمة المباشرة (اشتراكات الإنترنت)", "EXPENSE", isDebitNormal = true, isLocked = true),
                 AccountEntity(AccountConstants.OPERATING_EXPENSES, "مصاريف تشغيل وعمومية (ديزل/كهرباء)", "EXPENSE", isDebitNormal = true, isLocked = true),
                 AccountEntity(AccountConstants.MAINTENANCE_SPARES, "صيانة وقطع غيار", "EXPENSE", isDebitNormal = true, isLocked = true),
                 AccountEntity(AccountConstants.DEPRECIATION_EXPENSE, "إهلاك الأصول", "EXPENSE", isDebitNormal = true, isLocked = true),
                 AccountEntity(AccountConstants.SALARIES_STAFF, "رواتب وأجور وفنيون", "EXPENSE", isDebitNormal = true, isLocked = true),
                 AccountEntity(AccountConstants.MISC_EXPENSES, "مصاريف متنوعة", "EXPENSE", isDebitNormal = true, isLocked = true),
-                AccountEntity(AccountConstants.REALIZED_FX_LOSS, "خسائر فروق العملة", "EXPENSE", isDebitNormal = true, isLocked = true)
+                AccountEntity(AccountConstants.REALIZED_FX_LOSS, "خسائر فروق العملة المحققة", "EXPENSE", isDebitNormal = true, isLocked = true),
+                AccountEntity(AccountConstants.UNREALIZED_FX_LOSS, "خسائر فروق العملة غير المحققة (إعادة التقييم)", "EXPENSE", isDebitNormal = true, isLocked = true)
             )
 
             accounts.forEach { acc ->

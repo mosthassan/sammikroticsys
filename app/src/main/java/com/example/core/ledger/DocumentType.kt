@@ -11,7 +11,8 @@ enum class DocumentType(val codePrefix: String, val arabicName: String) {
     DEPRECIATION_RUN("DEP", "قيد إهلاك"),
     OPENING_BALANCE("OPN", "رصيد افتتاحي"),
     DIVIDEND_DISTRIBUTION("DIV", "توزيع أرباح"),
-    CLOSING_ENTRY("CLS", "قيد إقفال")
+    CLOSING_ENTRY("CLS", "قيد إقفال"),
+    PERIODIC_REVALUATION("REV", "إعادة تقييم دوري")
 }
 
 enum class DocumentStatus(val arabicName: String) {

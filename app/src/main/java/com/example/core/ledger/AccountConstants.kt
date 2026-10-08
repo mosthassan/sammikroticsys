@@ -22,6 +22,7 @@ object AccountConstants {
     const val SALES_RETURNS = "4102" // Contra-Revenue
     const val DIRECT_SERVICE_REVENUE = "4201"
     const val REALIZED_FX_GAIN = "4901"
+    const val UNREALIZED_FX_GAIN = "4902"
 
     // Expenses (5xxx)
     const val DIRECT_ISP_SERVICE_COST = "5101" // Upstream ISP (Starlink, fiber, bulk bandwidth)
@@ -31,6 +32,7 @@ object AccountConstants {
     const val SALARIES_STAFF = "5204" // Field technicians & staff
     const val MISC_EXPENSES = "5299"
     const val REALIZED_FX_LOSS = "5901"
+    const val UNREALIZED_FX_LOSS = "5902"
 
     val SYSTEM_CONTROL_ACCOUNTS = setOf(
         ACCOUNTS_RECEIVABLE,
@@ -53,13 +55,15 @@ object AccountConstants {
         SALES_RETURNS,
         DIRECT_SERVICE_REVENUE,
         REALIZED_FX_GAIN,
+        UNREALIZED_FX_GAIN,
         DIRECT_ISP_SERVICE_COST,
         OPERATING_EXPENSES,
         MAINTENANCE_SPARES,
         DEPRECIATION_EXPENSE,
         SALARIES_STAFF,
         MISC_EXPENSES,
-        REALIZED_FX_LOSS
+        REALIZED_FX_LOSS,
+        UNREALIZED_FX_LOSS
     )
 
     fun isDebitNormal(accountCode: String): Boolean {

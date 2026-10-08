@@ -30,9 +30,13 @@ data class AccountBalanceRow(
     val accountName: String,
     val totalDebitMinor: Long,
     val totalCreditMinor: Long,
-    val isDebitNormal: Boolean
+    val isDebitNormal: Boolean,
+    val origDebitMinor: Long = 0L,
+    val origCreditMinor: Long = 0L,
+    val currency: String = "YER"
 ) {
     val netBalanceMinor: Long get() = if (isDebitNormal) totalDebitMinor - totalCreditMinor else totalCreditMinor - totalDebitMinor
+    val netOrigBalanceMinor: Long get() = if (isDebitNormal) origDebitMinor - origCreditMinor else origCreditMinor - origDebitMinor
 }
 
 data class PartyBalanceRow(
@@ -63,12 +67,17 @@ data class IncomeStatementRow(
     val accountName: String,
     val totalDebitMinor: Long,
     val totalCreditMinor: Long,
-    val isDebitNormal: Boolean
+    val isDebitNormal: Boolean,
+    val origDebitMinor: Long = 0L,
+    val origCreditMinor: Long = 0L,
+    val currency: String = "YER"
 ) {
     // For revenue accounts (4xxx, credit normal): credit - debit
     // For expense accounts (5xxx, debit normal): debit - credit
     val netAmountMinor: Long
         get() = if (isDebitNormal) totalDebitMinor - totalCreditMinor else totalCreditMinor - totalDebitMinor
+    val netOrigAmountMinor: Long
+        get() = if (isDebitNormal) origDebitMinor - origCreditMinor else origCreditMinor - origDebitMinor
 }
 
 data class BalanceSheetRow(
@@ -77,11 +86,21 @@ data class BalanceSheetRow(
     val accountType: String,
     val totalDebitMinor: Long,
     val totalCreditMinor: Long,
-    val isDebitNormal: Boolean
+    val isDebitNormal: Boolean,
+    val origDebitMinor: Long = 0L,
+    val origCreditMinor: Long = 0L,
+    val currency: String = "YER"
 ) {
     val netBalanceMinor: Long
         get() = if (isDebitNormal) totalDebitMinor - totalCreditMinor else totalCreditMinor - totalDebitMinor
+    val netOrigBalanceMinor: Long
+        get() = if (isDebitNormal) origDebitMinor - origCreditMinor else origCreditMinor - origDebitMinor
 }
+
+data class PartyForeignBalanceItem(
+    val partyId: String,
+    val currency: String
+)
 
 /**
  * Journal entries and lines write access is restricted exclusively to LedgerWriter.
@@ -136,7 +155,10 @@ internal interface JournalDao {
         SELECT jl.accountCode AS accountCode, a.name AS accountName,
                COALESCE(SUM(jl.baseDebitMinor), 0) AS totalDebitMinor,
                COALESCE(SUM(jl.baseCreditMinor), 0) AS totalCreditMinor,
-               a.isDebitNormal AS isDebitNormal
+               a.isDebitNormal AS isDebitNormal,
+               COALESCE(SUM(CASE WHEN jl.baseDebitMinor > 0 THEN jl.origMinor ELSE 0 END), 0) AS origDebitMinor,
+               COALESCE(SUM(CASE WHEN jl.baseCreditMinor > 0 THEN jl.origMinor ELSE 0 END), 0) AS origCreditMinor,
+               COALESCE(MAX(jl.currency), 'YER') AS currency
         FROM journal_lines jl
         INNER JOIN journal_entries je ON jl.entryId = je.id
         INNER JOIN accounts a ON jl.accountCode = a.code
@@ -156,10 +178,13 @@ internal interface JournalDao {
         SELECT a.code AS accountCode, a.name AS accountName, a.type AS accountType,
                COALESCE(SUM(jl.baseDebitMinor), 0) AS totalDebitMinor,
                COALESCE(SUM(jl.baseCreditMinor), 0) AS totalCreditMinor,
-               a.isDebitNormal AS isDebitNormal
+               a.isDebitNormal AS isDebitNormal,
+               COALESCE(SUM(CASE WHEN jl.baseDebitMinor > 0 THEN jl.origMinor ELSE 0 END), 0) AS origDebitMinor,
+               COALESCE(SUM(CASE WHEN jl.baseCreditMinor > 0 THEN jl.origMinor ELSE 0 END), 0) AS origCreditMinor,
+               COALESCE(MAX(jl.currency), 'YER') AS currency
         FROM accounts a
         LEFT JOIN (
-            SELECT jl_inner.accountCode, jl_inner.baseDebitMinor, jl_inner.baseCreditMinor
+            SELECT jl_inner.accountCode, jl_inner.baseDebitMinor, jl_inner.baseCreditMinor, jl_inner.origMinor, jl_inner.currency
             FROM journal_lines jl_inner
             INNER JOIN journal_entries je_inner ON jl_inner.entryId = je_inner.id
             WHERE (:asOfDateEpochDay IS NULL OR je_inner.entryDateEpochDay <= :asOfDateEpochDay)
@@ -176,7 +201,10 @@ internal interface JournalDao {
         SELECT a.code AS accountCode, a.name AS accountName,
                COALESCE(SUM(jl.baseDebitMinor), 0) AS totalDebitMinor,
                COALESCE(SUM(jl.baseCreditMinor), 0) AS totalCreditMinor,
-               a.isDebitNormal AS isDebitNormal
+               a.isDebitNormal AS isDebitNormal,
+               COALESCE(SUM(CASE WHEN jl.baseDebitMinor > 0 THEN jl.origMinor ELSE 0 END), 0) AS origDebitMinor,
+               COALESCE(SUM(CASE WHEN jl.baseCreditMinor > 0 THEN jl.origMinor ELSE 0 END), 0) AS origCreditMinor,
+               COALESCE(MAX(jl.currency), 'YER') AS currency
         FROM accounts a
         LEFT JOIN journal_lines jl ON a.code = jl.accountCode
         GROUP BY a.code, a.name, a.isDebitNormal
@@ -188,7 +216,10 @@ internal interface JournalDao {
         SELECT a.code AS accountCode, a.name AS accountName,
                COALESCE(SUM(jl.baseDebitMinor), 0) AS totalDebitMinor,
                COALESCE(SUM(jl.baseCreditMinor), 0) AS totalCreditMinor,
-               a.isDebitNormal AS isDebitNormal
+               a.isDebitNormal AS isDebitNormal,
+               COALESCE(SUM(CASE WHEN jl.baseDebitMinor > 0 THEN jl.origMinor ELSE 0 END), 0) AS origDebitMinor,
+               COALESCE(SUM(CASE WHEN jl.baseCreditMinor > 0 THEN jl.origMinor ELSE 0 END), 0) AS origCreditMinor,
+               COALESCE(MAX(jl.currency), 'YER') AS currency
         FROM accounts a
         LEFT JOIN journal_lines jl ON a.code = jl.accountCode
         GROUP BY a.code, a.name, a.isDebitNormal
@@ -285,6 +316,45 @@ internal interface JournalDao {
         WHERE treasuryId = :treasuryId
     """)
     suspend fun getNetOrigBalanceForTreasury(treasuryId: String): Long
+
+    @Query("""
+        SELECT COALESCE(
+            SUM(CASE WHEN baseDebitMinor > 0 THEN origMinor ELSE -origMinor END), 0
+        )
+        FROM journal_lines
+        WHERE partyId = :partyId AND accountCode = '1201' AND currency = :currency
+    """)
+    suspend fun getPartyReceivableOrigBalance(partyId: String, currency: String): Long
+
+    @Query("""
+        SELECT COALESCE(SUM(baseDebitMinor) - SUM(baseCreditMinor), 0)
+        FROM journal_lines
+        WHERE partyId = :partyId AND accountCode = '1201' AND currency = :currency
+    """)
+    suspend fun getPartyReceivableBaseBalanceByCurrency(partyId: String, currency: String): Long
+
+    @Query("""
+        SELECT COALESCE(
+            SUM(CASE WHEN baseCreditMinor > 0 THEN origMinor ELSE -origMinor END), 0
+        )
+        FROM journal_lines
+        WHERE partyId = :partyId AND accountCode = '2101' AND currency = :currency
+    """)
+    suspend fun getPartyPayableOrigBalance(partyId: String, currency: String): Long
+
+    @Query("""
+        SELECT COALESCE(SUM(baseCreditMinor) - SUM(baseDebitMinor), 0)
+        FROM journal_lines
+        WHERE partyId = :partyId AND accountCode = '2101' AND currency = :currency
+    """)
+    suspend fun getPartyPayableBaseBalanceByCurrency(partyId: String, currency: String): Long
+
+    @Query("""
+        SELECT DISTINCT partyId, currency
+        FROM journal_lines
+        WHERE accountCode = :accountCode AND currency != 'YER' AND partyId IS NOT NULL
+    """)
+    suspend fun getPartiesWithForeignBalance(accountCode: String): List<PartyForeignBalanceItem>
 }
 
 @Dao

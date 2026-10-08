@@ -99,6 +99,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val batchImportUseCase = BatchImportUseCase(db, writer)
     val exchangeRateResolver = ExchangeRateResolver(db)
     val partnerEquityUseCase = com.example.domain.usecase.PartnerEquityUseCase(db, writer)
+    val periodicRevaluationUseCase = com.example.domain.usecase.PeriodicRevaluationUseCase(db, writer, exchangeRateResolver)
 
     // Organization & Exchange Rates
     val organization: StateFlow<OrganizationEntity?> = db.organizationDao().getOrganizationFlow()
@@ -598,6 +599,28 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun getDocumentsByPartyFlow(partyId: String): Flow<List<DocumentEntity>> {
         return db.documentDao().getDocumentsByPartyFlow(partyId)
+    }
+
+    fun runPeriodicRevaluation(
+        fiscalYear: Int = getLocalNow().year,
+        dateEpochDay: Long = getLocalNow().toEpochDay(),
+        rateZone: RateZone = RateZone.SANAA,
+        notes: String? = null
+    ) {
+        viewModelScope.launch {
+            try {
+                val docs = periodicRevaluationUseCase.executePeriodicRevaluationRun(
+                    fiscalYear = fiscalYear,
+                    dateEpochDay = dateEpochDay,
+                    rateZone = rateZone,
+                    notes = notes
+                )
+                _userMessage.emit("تم تنفيذ إعادة التقييم الدوري بنجاح (${docs.size} قيد تم ترحيله)")
+                refreshDashboard()
+            } catch (e: Exception) {
+                _userMessage.emit("فشل إعادة التقييم الدوري: ${e.message}")
+            }
+        }
     }
 
     fun postPurchaseInvoice(

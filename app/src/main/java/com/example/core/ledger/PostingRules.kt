@@ -1469,6 +1469,133 @@ object PostingRules {
             lines = lines
         )
     }
+
+    /**
+     * IAS 21 Periodic Revaluation (D.1):
+     * Revalues foreign monetary items:
+     * - Foreign Treasury/Bank Accounts (1101/1102)
+     * - Foreign Receivables (1201)
+     * - Foreign Payables (2101)
+     *
+     * Invariant: Non-monetary items (Fixed Assets 1501, Inventory 1401, Partner Capital 3101) MUST NEVER be revalued.
+     *
+     * If gain (delta > 0):
+     * DR Monetary Account (Treasury/Receivable/Payable)
+     * CR 4902 Unrealized FX Gain
+     *
+     * If loss (delta < 0):
+     * DR 5902 Unrealized FX Loss
+     * CR Monetary Account (Treasury/Receivable/Payable)
+     */
+    fun createPeriodicRevaluationDraft(
+        accountCode: String,
+        partyId: String? = null,
+        treasuryId: String? = null,
+        deltaMinor: Long,
+        currency: CurrencyCode,
+        exchangeRate: ExchangeRate,
+        dateEpochDay: Long,
+        memo: String
+    ): JournalDraft {
+        val monetaryAccounts = setOf(
+            AccountConstants.CASH_VAULT,
+            AccountConstants.BANKS_WALLETS,
+            AccountConstants.ACCOUNTS_RECEIVABLE,
+            AccountConstants.ACCOUNTS_PAYABLE
+        )
+        require(accountCode in monetaryAccounts) {
+            "IAS 21 Violation: Account $accountCode is non-monetary and cannot be revalued. Non-monetary items (Fixed Assets 1501, Inventory 1401, Partner Capital 3101) must never be revalued under IAS 21."
+        }
+        require(currency != CurrencyCode.FUNCTIONAL) {
+            "Cannot revalue functional currency (${CurrencyCode.FUNCTIONAL.name})"
+        }
+        require(deltaMinor != 0L) {
+            "Revaluation delta cannot be zero"
+        }
+
+        if (accountCode == AccountConstants.ACCOUNTS_RECEIVABLE || accountCode == AccountConstants.ACCOUNTS_PAYABLE) {
+            require(!partyId.isNullOrBlank()) {
+                "Monetary account $accountCode requires an explicit partyId for subledger reconciliation"
+            }
+        }
+        if (accountCode == AccountConstants.CASH_VAULT || accountCode == AccountConstants.BANKS_WALLETS) {
+            require(!treasuryId.isNullOrBlank()) {
+                "Monetary account $accountCode requires an explicit treasuryId"
+            }
+        }
+
+        val lines = mutableListOf<JournalDraftLine>()
+        val absDelta = Math.abs(deltaMinor)
+
+        if (deltaMinor > 0L) {
+            // Gain: DR Monetary Account, CR 4902 Unrealized FX Gain
+            lines.add(
+                JournalDraftLine(
+                    lineNo = 1,
+                    accountCode = accountCode,
+                    partyId = partyId,
+                    treasuryId = treasuryId,
+                    origMinor = 0L,
+                    currency = currency,
+                    exchangeRateMicros = exchangeRate.rateMicros,
+                    baseDebitMinor = absDelta,
+                    baseCreditMinor = 0L,
+                    memo = memo
+                )
+            )
+            lines.add(
+                JournalDraftLine(
+                    lineNo = 2,
+                    accountCode = AccountConstants.UNREALIZED_FX_GAIN,
+                    partyId = null,
+                    treasuryId = null,
+                    origMinor = absDelta,
+                    currency = CurrencyCode.FUNCTIONAL,
+                    exchangeRateMicros = ExchangeRate.SCALE_MICROS,
+                    baseDebitMinor = 0L,
+                    baseCreditMinor = absDelta,
+                    memo = memo
+                )
+            )
+        } else {
+            // Loss: DR 5902 Unrealized FX Loss, CR Monetary Account
+            lines.add(
+                JournalDraftLine(
+                    lineNo = 1,
+                    accountCode = AccountConstants.UNREALIZED_FX_LOSS,
+                    partyId = null,
+                    treasuryId = null,
+                    origMinor = absDelta,
+                    currency = CurrencyCode.FUNCTIONAL,
+                    exchangeRateMicros = ExchangeRate.SCALE_MICROS,
+                    baseDebitMinor = absDelta,
+                    baseCreditMinor = 0L,
+                    memo = memo
+                )
+            )
+            lines.add(
+                JournalDraftLine(
+                    lineNo = 2,
+                    accountCode = accountCode,
+                    partyId = partyId,
+                    treasuryId = treasuryId,
+                    origMinor = 0L,
+                    currency = currency,
+                    exchangeRateMicros = exchangeRate.rateMicros,
+                    baseDebitMinor = 0L,
+                    baseCreditMinor = absDelta,
+                    memo = memo
+                )
+            )
+        }
+
+        return JournalDraft(
+            type = JournalEntryType.NORMAL,
+            entryDateEpochDay = dateEpochDay,
+            memo = memo,
+            lines = lines
+        )
+    }
 }
 
 data class OpeningBalanceLineSpec(
