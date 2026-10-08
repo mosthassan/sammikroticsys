@@ -92,6 +92,19 @@ import com.example.ui.components.SectionHeader
 import com.example.ui.components.StatusChip
 import com.example.domain.usecase.ExchangeRateResolver
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.background
+import com.example.ui.theme.AssetPurple
+import com.example.ui.theme.CyberBorder
+import com.example.ui.theme.CyberBorderGlow
+import com.example.ui.theme.CyberDarkCanvas
+import com.example.ui.theme.CyberDarkCardElevated
+import com.example.ui.theme.CyberDarkSurface
+import com.example.ui.theme.MikroTikNavyLight
+import com.example.ui.theme.MikroTikPrimary
+import com.example.ui.theme.StatusWarning
+import com.example.ui.theme.TextMutedDark
+import com.example.ui.theme.TextPrimaryDark
+import com.example.ui.theme.TextSecondaryDark
 import com.example.ui.theme.SemanticExpenseRed
 import com.example.ui.theme.SemanticIncomeGreen
 import com.example.ui.viewmodel.AppViewModel
@@ -681,7 +694,11 @@ fun NewPurchaseBottomSheet(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val effectiveResolver = resolver ?: remember { ExchangeRateResolver(AppDatabase.getInstance(context)) }
-    var selectedVendorId by rememberSaveable { mutableStateOf(parties.firstOrNull { it.isVendor }?.id ?: AppDatabase.WALK_IN_CASH_PARTY_ID) }
+    val vendors = remember(parties) { parties.filter { it.isVendor } }
+    var vendorSearchQuery by rememberSaveable { mutableStateOf("") }
+    var selectedVendorId by rememberSaveable {
+        mutableStateOf(vendors.firstOrNull()?.id ?: AppDatabase.WALK_IN_CASH_PARTY_ID)
+    }
     var selectedCurrency by rememberSaveable { mutableStateOf(CurrencyCode.USD) }
     var selectedZone by rememberSaveable { mutableStateOf(RateZone.SANAA) }
     var resolvedRate by remember { mutableStateOf<ExchangeRate?>(null) }
@@ -706,6 +723,7 @@ fun NewPurchaseBottomSheet(
 
     val effectiveRate = manualRateOverride ?: resolvedRate
 
+    // New item inputs
     var itemDesc by rememberSaveable { mutableStateOf("") }
     var itemQtyText by rememberSaveable { mutableStateOf("1") }
     var itemPriceText by rememberSaveable { mutableStateOf("100") }
@@ -716,9 +734,31 @@ fun NewPurchaseBottomSheet(
     val itemsList = remember { androidx.compose.runtime.mutableStateListOf<PurchaseItemSpec>() }
     val scrollState = rememberScrollState()
 
+    val filteredVendors = remember(vendors, vendorSearchQuery) {
+        if (vendorSearchQuery.isBlank()) vendors
+        else vendors.filter { it.name.contains(vendorSearchQuery.trim(), ignoreCase = true) }
+    }
+
+    val totalForeignMinor = itemsList.sumOf { it.quantity * it.unitPriceMinor }
+    val totalYerMinor = if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
+        totalForeignMinor
+    } else {
+        effectiveRate?.convert(totalForeignMinor) ?: 0L
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        containerColor = CyberDarkCanvas,
+        dragHandle = {
+            Surface(
+                modifier = Modifier.padding(top = 10.dp, bottom = 6.dp),
+                color = CyberBorderGlow,
+                shape = RoundedCornerShape(2.dp)
+            ) {
+                Box(modifier = Modifier.size(width = 44.dp, height = 4.dp))
+            }
+        }
     ) {
         Column(
             modifier = Modifier
@@ -726,162 +766,442 @@ fun NewPurchaseBottomSheet(
                 .navigationBarsPadding()
                 .imePadding()
         ) {
-            Text(
-                text = "فاتورة مشتريات وتجهيز شبكة",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-            )
+            // Header Bar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        color = MikroTikCyan.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.ShoppingCart, contentDescription = null, tint = MikroTikCyan, modifier = Modifier.size(22.dp))
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = "فاتورة مشتريات وتوريد شبكة",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimaryDark
+                        )
+                        Text(
+                            text = "تسجيل فواتير الموردين واعتماد الأصول ومستلزمات الشبكة",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondaryDark,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Default.Delete, contentDescription = "إغلاق", tint = TextMutedDark, modifier = Modifier.size(20.dp))
+                }
+            }
 
-            HorizontalDivider()
+            HorizontalDivider(color = CyberBorder)
 
             Column(
                 modifier = Modifier
                     .weight(1f, fill = false)
                     .verticalScroll(scrollState)
                     .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Text("المورد:")
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-                    items(parties.filter { it.isVendor }) { v ->
-                        FilterChip(
-                            selected = selectedVendorId == v.id,
-                            onClick = { selectedVendorId = v.id },
-                            label = { Text(v.name, maxLines = 1, softWrap = false) }
-                        )
-                    }
-                }
-
-                Text("العملة المعتمدة للفاتورة:")
-                CurrencySelector(
-                    selectedCurrency = selectedCurrency,
-                    onCurrencySelected = { selectedCurrency = it }
-                )
-
-                if (selectedCurrency != CurrencyCode.FUNCTIONAL) {
-                    ExchangeRateCard(
-                        currency = selectedCurrency,
-                        rate = effectiveRate,
-                        zone = selectedZone,
-                        onZoneToggle = {
-                            selectedZone = if (selectedZone == RateZone.SANAA) RateZone.ADEN else RateZone.SANAA
-                            manualRateOverride = null
-                        },
-                        onEditRateClick = {
-                            manualRateInputText = effectiveRate?.let { ExchangeRate.formatRateMicros(it.rateMicros) } ?: ""
-                            manualOverrideReason = "سعر صراف معتمد / تقلبات سوق"
-                            showManualRateDialog = true
-                        }
-                    )
-                }
-
-                SectionHeader(title = "إضافة بند مشتريات")
-                OutlinedTextField(
-                    value = itemDesc,
-                    onValueChange = { itemDesc = it },
-                    label = { Text("اسم الجهاز أو المادة (مثال: راوتر MikroTik CCR)") },
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = itemQtyText,
-                        onValueChange = { itemQtyText = it },
-                        label = { Text("الكمية") },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedTextField(
-                        value = itemPriceText,
-                        onValueChange = { itemPriceText = it },
-                        label = { Text("السعر بالـ ${selectedCurrency.name}") },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.weight(1.5f)
-                    )
-                }
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = isFixedAsset, onCheckedChange = { isFixedAsset = it })
-                    Text("أصل شبكة ثابت (يُدرج تلقائياً في سجل الأصول 1501)")
-                }
-
-                if (isFixedAsset) {
-                    OutlinedTextField(
-                        value = usefulMonthsText,
-                        onValueChange = { usefulMonthsText = it },
-                        label = { Text("العمر الافتراضي (بالأشهر)") },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-
-                Button(
-                    onClick = {
-                        val q = itemQtyText.toIntOrNull() ?: 1
-                        val p = Money.parseFromUserInput(itemPriceText, selectedCurrency)?.minor ?: 0L
-                        val m = usefulMonthsText.toIntOrNull() ?: 24
-                        val code = if (isFixedAsset) AccountConstants.FIXED_ASSETS_NETWORK else AccountConstants.OPERATING_EXPENSES
-                        itemsList.add(PurchaseItemSpec(itemDesc.ifBlank { "معدات شبكة" }, code, q, p, isFixedAsset, m))
-                        itemDesc = ""
-                    },
-                    shape = RoundedCornerShape(12.dp),
+                // SECTION 1: HEADER & SUPPLIER SELECTION CARD
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = CyberDarkSurface),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, CyberBorder),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("إضافة البند للفاتورة")
-                }
-
-                itemsList.forEachIndexed { idx, itm ->
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.fillMaxWidth()
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Row(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("• ${itm.description}: ${itm.quantity} × ${Money(itm.unitPriceMinor, selectedCurrency).format()}")
-                            IconButton(onClick = { itemsList.removeAt(idx) }) {
-                                Icon(Icons.Default.Delete, contentDescription = "حذف")
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Surface(
+                                    color = MikroTikPrimary.copy(alpha = 0.2f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Text("1", color = MikroTikCyan, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("بيانات المورد والعملة والتسعيرة", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = TextPrimaryDark)
+                            }
+
+                            // Interactive RateZone switch with live badge
+                            if (selectedCurrency != CurrencyCode.FUNCTIONAL) {
+                                Surface(
+                                    color = if (selectedZone == RateZone.SANAA) MikroTikNavyLight else CyberDarkCardElevated,
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = BorderStroke(1.dp, if (selectedZone == RateZone.SANAA) MikroTikCyan.copy(alpha = 0.5f) else StatusWarning.copy(alpha = 0.5f)),
+                                    modifier = Modifier
+                                        .clickable {
+                                            selectedZone = if (selectedZone == RateZone.SANAA) RateZone.ADEN else RateZone.SANAA
+                                            manualRateOverride = null
+                                        }
+                                        .testTag("rate_zone_toggle_badge")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .background(if (selectedZone == RateZone.SANAA) MikroTikCyan else StatusWarning, RoundedCornerShape(4.dp))
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = if (selectedZone == RateZone.SANAA) "نطاق صنعاء" else "نطاق عدن",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 11.sp,
+                                            color = if (selectedZone == RateZone.SANAA) MikroTikCyan else StatusWarning
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Supplier search & picker
+                        OutlinedTextField(
+                            value = vendorSearchQuery,
+                            onValueChange = { vendorSearchQuery = it },
+                            placeholder = { Text("بحث عن مورد بالاسم...", fontSize = 12.sp, color = TextMutedDark) },
+                            singleLine = true,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp)
+                                .testTag("input_vendor_search")
+                        )
+
+                        // Vendor chips
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            items(filteredVendors) { v ->
+                                val isSelected = selectedVendorId == v.id
+                                Surface(
+                                    color = if (isSelected) MikroTikPrimary.copy(alpha = 0.25f) else CyberDarkCardElevated,
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = BorderStroke(1.dp, if (isSelected) MikroTikCyan else CyberBorder),
+                                    modifier = Modifier
+                                        .clickable { selectedVendorId = v.id }
+                                        .testTag("chip_vendor_${v.id}")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = v.name,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isSelected) MikroTikCyan else TextPrimaryDark,
+                                            fontSize = 12.sp,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Currency Selector Chips
+                        Text("العملة المعتمدة للفاتورة:", fontSize = 12.sp, color = TextSecondaryDark)
+                        CurrencySelector(
+                            selectedCurrency = selectedCurrency,
+                            onCurrencySelected = { selectedCurrency = it }
+                        )
+
+                        // Rate Details Card if foreign
+                        if (selectedCurrency != CurrencyCode.FUNCTIONAL) {
+                            ExchangeRateCard(
+                                currency = selectedCurrency,
+                                rate = effectiveRate,
+                                zone = selectedZone,
+                                onZoneToggle = {
+                                    selectedZone = if (selectedZone == RateZone.SANAA) RateZone.ADEN else RateZone.SANAA
+                                    manualRateOverride = null
+                                },
+                                onEditRateClick = {
+                                    manualRateInputText = effectiveRate?.let { ExchangeRate.formatRateMicros(it.rateMicros) } ?: ""
+                                    manualOverrideReason = "سعر صراف معتمد / تقلبات سوق"
+                                    showManualRateDialog = true
+                                }
+                            )
+                        }
+                    }
+                }
+
+                // SECTION 2: ITEMS ENTRY DYNAMIC MULTI-ITEM GRID
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = CyberDarkSurface),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, CyberBorder),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Surface(
+                                    color = MikroTikCyan.copy(alpha = 0.2f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Text("2", color = MikroTikCyan, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("إضافة بنود وأصناف الفاتورة", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = TextPrimaryDark)
+                            }
+                            Text("${itemsList.size} بنود مضافة", fontSize = 11.sp, color = TextSecondaryDark)
+                        }
+
+                        // Quick presets chips for network hardware & consumables
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            val suggestions = listOf("راوتر MikroTik CCR", "سويتش Gigabit 24-Port", "أنتينا Sector 5GHz", "كيبل إيثرنت Cat6 رول", "محول طاقة PoE 24V", "بطارية جيل 150Ah")
+                            items(suggestions) { sugg ->
+                                Surface(
+                                    color = CyberDarkCardElevated,
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = BorderStroke(1.dp, CyberBorder),
+                                    modifier = Modifier.clickable {
+                                        itemDesc = sugg
+                                        isFixedAsset = sugg.contains("راوتر") || sugg.contains("سويتش") || sugg.contains("أنتينا") || sugg.contains("بطارية")
+                                    }
+                                ) {
+                                    Text(
+                                        text = sugg,
+                                        fontSize = 11.sp,
+                                        color = TextSecondaryDark,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        OutlinedTextField(
+                            value = itemDesc,
+                            onValueChange = { itemDesc = it },
+                            label = { Text("اسم الجهاز أو الصنف (مثال: راوتر CCR2004)") },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("input_item_desc")
+                        )
+
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = itemQtyText,
+                                onValueChange = { itemQtyText = it },
+                                label = { Text("الكمية") },
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1f).testTag("input_item_qty")
+                            )
+                            OutlinedTextField(
+                                value = itemPriceText,
+                                onValueChange = { itemPriceText = it },
+                                label = { Text("سعر الوحدة (${selectedCurrency.name})") },
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1.5f).testTag("input_item_price")
+                            )
+                        }
+
+                        // Row calculation preview
+                        val enteredQty = itemQtyText.toIntOrNull() ?: 0
+                        val enteredPrice = Money.parseFromUserInput(itemPriceText, selectedCurrency)?.minor ?: 0L
+                        val rowCalculatedMinor = enteredQty * enteredPrice
+                        if (rowCalculatedMinor > 0L) {
+                            Surface(
+                                color = CyberDarkCardElevated,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("إجمالي البند المتوقع:", fontSize = 11.sp, color = TextSecondaryDark)
+                                    Text(
+                                        Money(rowCalculatedMinor, selectedCurrency).format(),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp,
+                                        color = MikroTikCyan
+                                    )
+                                }
+                            }
+                        }
+
+                        // Asset Classification Switch & Useful Months
+                        Surface(
+                            color = if (isFixedAsset) AssetPurple.copy(alpha = 0.12f) else CyberDarkCardElevated,
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, if (isFixedAsset) AssetPurple.copy(alpha = 0.4f) else CyberBorder),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Checkbox(
+                                            checked = isFixedAsset,
+                                            onCheckedChange = { isFixedAsset = it },
+                                            modifier = Modifier.testTag("chk_fixed_asset")
+                                        )
+                                        Text(
+                                            "تصنيف كـ أصل شبكة رأسمالي (حساب 1501)",
+                                            fontSize = 12.sp,
+                                            fontWeight = if (isFixedAsset) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isFixedAsset) AssetPurple else TextPrimaryDark
+                                        )
+                                    }
+                                    if (isFixedAsset) {
+                                        Surface(
+                                            color = AssetPurple.copy(alpha = 0.2f),
+                                            shape = RoundedCornerShape(6.dp)
+                                        ) {
+                                            Text("إهلاك تلقائي", fontSize = 10.sp, color = AssetPurple, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp), fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+
+                                if (isFixedAsset) {
+                                    OutlinedTextField(
+                                        value = usefulMonthsText,
+                                        onValueChange = { usefulMonthsText = it },
+                                        label = { Text("العمر الافتراضي للاستهلاك (بالأشهر)") },
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier.fillMaxWidth().testTag("input_useful_months")
+                                    )
+                                }
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                val q = itemQtyText.toIntOrNull() ?: 1
+                                val p = Money.parseFromUserInput(itemPriceText, selectedCurrency)?.minor ?: 0L
+                                val m = usefulMonthsText.toIntOrNull() ?: 24
+                                val code = if (isFixedAsset) AccountConstants.FIXED_ASSETS_NETWORK else AccountConstants.OPERATING_EXPENSES
+                                itemsList.add(PurchaseItemSpec(itemDesc.ifBlank { "معدات شبكة" }, code, q, p, isFixedAsset, m))
+                                itemDesc = ""
+                                itemQtyText = "1"
+                            },
+                            enabled = itemDesc.isNotBlank() || itemsList.isEmpty(),
+                            colors = ButtonDefaults.buttonColors(containerColor = MikroTikPrimary),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("btn_add_purchase_item_row")
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("إدراج الصنف في جدول الفاتورة", fontWeight = FontWeight.Bold)
+                        }
+
+                        // Added Items Multi-Row List
+                        if (itemsList.isNotEmpty()) {
+                            Text("الأصناف المدرجة في الفاتورة:", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = TextPrimaryDark)
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                itemsList.forEachIndexed { idx, itm ->
+                                    val rowTotal = itm.quantity * itm.unitPriceMinor
+                                    Surface(
+                                        color = CyberDarkCardElevated,
+                                        shape = RoundedCornerShape(10.dp),
+                                        border = BorderStroke(1.dp, if (itm.isAsset) AssetPurple.copy(alpha = 0.3f) else CyberBorder),
+                                        modifier = Modifier.fillMaxWidth().testTag("item_row_$idx")
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Text(itm.description, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = TextPrimaryDark)
+                                                    if (itm.isAsset) {
+                                                        Spacer(modifier = Modifier.width(6.dp))
+                                                        Surface(color = AssetPurple.copy(alpha = 0.2f), shape = RoundedCornerShape(4.dp)) {
+                                                            Text("أصل ${itm.usefulLifeMonths} شهر", fontSize = 9.sp, color = AssetPurple, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+                                                        }
+                                                    }
+                                                }
+                                                Text(
+                                                    "${itm.quantity} قطعة × ${Money(itm.unitPriceMinor, selectedCurrency).format()} = ${Money(rowTotal, selectedCurrency).format()}",
+                                                    fontSize = 11.sp,
+                                                    color = TextSecondaryDark
+                                                )
+                                            }
+                                            IconButton(
+                                                onClick = { itemsList.removeAt(idx) },
+                                                modifier = Modifier.testTag("btn_delete_item_$idx")
+                                            ) {
+                                                Icon(Icons.Default.Delete, contentDescription = "حذف", tint = SemanticExpenseRed, modifier = Modifier.size(18.dp))
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
 
-                val totalForeignMinor = itemsList.sumOf { it.quantity * it.unitPriceMinor }
-                val totalYerMinor = if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
-                    totalForeignMinor
-                } else {
-                    effectiveRate?.convert(totalForeignMinor) ?: 0L
-                }
-
+                // SECTION 3: LIVE FINANCIAL SUMMARY BAR (Elevated Container)
                 if (itemsList.isNotEmpty()) {
                     Surface(
-                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f),
-                        shape = RoundedCornerShape(12.dp),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                        color = CyberDarkSurface,
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.5.dp, MikroTikCyan.copy(alpha = 0.4f)),
                         modifier = Modifier.fillMaxWidth().testTag("purchase_totals_summary_card")
                     ) {
                         Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("إجمالي الفاتورة (${selectedCurrency.name}):", fontWeight = FontWeight.SemiBold)
+                                Text("إجمالي الفاتورة (${selectedCurrency.name}):", fontWeight = FontWeight.SemiBold, color = TextSecondaryDark, fontSize = 13.sp)
                                 Text(
                                     Money(totalForeignMinor, selectedCurrency).format(),
                                     fontWeight = FontWeight.Bold,
-                                    fontSize = 16.sp,
-                                    color = MaterialTheme.colorScheme.primary
+                                    fontSize = 18.sp,
+                                    color = MikroTikCyan
                                 )
                             }
+
                             if (selectedCurrency != CurrencyCode.FUNCTIONAL) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
@@ -889,14 +1209,43 @@ fun NewPurchaseBottomSheet(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        "المعادل بالريال اليمني (${if (selectedZone == RateZone.SANAA) "صنعاء" else "عدن"}):",
+                                        "سعر الصرف المطبق (${if (selectedZone == RateZone.SANAA) "صنعاء" else "عدن"}):",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = TextMutedDark,
+                                        fontSize = 11.sp
                                     )
+                                    Text(
+                                        effectiveRate?.let { "1 ${selectedCurrency.name} = ${ExchangeRate.formatRateMicros(it.rateMicros)} YER" } ?: "غير محدد",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = TextSecondaryDark
+                                    )
+                                }
+
+                                HorizontalDivider(color = CyberBorder)
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column {
+                                        Text(
+                                            "الإجمالي بالريال اليمني (قيد الأستاذ العام):",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            color = TextPrimaryDark
+                                        )
+                                        Text(
+                                            "الأساس المحاسبي لترحيل الالتزام والأصل",
+                                            fontSize = 10.sp,
+                                            color = TextMutedDark
+                                        )
+                                    }
                                     Text(
                                         Money(totalYerMinor, CurrencyCode.FUNCTIONAL).format(),
                                         fontWeight = FontWeight.Bold,
-                                        fontSize = 15.sp,
+                                        fontSize = 18.sp,
                                         color = SemanticIncomeGreen
                                     )
                                 }
@@ -905,26 +1254,30 @@ fun NewPurchaseBottomSheet(
                     }
                 }
 
+                // Notes input
                 OutlinedTextField(
                     value = notes,
                     onValueChange = { notes = it },
-                    label = { Text("ملاحظات") },
+                    label = { Text("البيان والملاحظات (رقم الفاتورة اليدوي أو شروط الدفع)") },
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().testTag("input_purchase_notes")
                 )
             }
 
-            HorizontalDivider()
+            HorizontalDivider(color = CyberBorder)
 
+            // ACTION BAR: Modern elevated primary action button with visual validation states
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                val canSubmit = itemsList.isNotEmpty() && (selectedCurrency == CurrencyCode.FUNCTIONAL || effectiveRate != null)
                 Button(
                     onClick = {
-                        if (itemsList.isNotEmpty()) {
+                        if (canSubmit) {
                             val rate = if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
                                 ExchangeRate.parity(CurrencyCode.FUNCTIONAL)
                             } else {
@@ -933,14 +1286,35 @@ fun NewPurchaseBottomSheet(
                             onSubmit(selectedVendorId, selectedCurrency, rate, itemsList.toList(), notes)
                         }
                     },
-                    enabled = itemsList.isNotEmpty() && (selectedCurrency == CurrencyCode.FUNCTIONAL || effectiveRate != null),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.weight(1f).height(48.dp)
+                    enabled = canSubmit,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (canSubmit) MikroTikCyan else CyberDarkCardElevated,
+                        contentColor = if (canSubmit) CyberDarkCanvas else TextMutedDark
+                    ),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(52.dp)
+                        .testTag("btn_submit_purchase_invoice")
                 ) {
-                    Text("ترحيل فاتورة المشتريات", fontWeight = FontWeight.Bold)
+                    Icon(
+                        Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (itemsList.isEmpty()) "أضف بنوداً للاعتماد" else "ترحيل الفاتورة واعتماد السند",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
                 }
-                TextButton(onClick = onDismiss, modifier = Modifier.height(48.dp)) {
-                    Text("إلغاء")
+
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.height(52.dp)
+                ) {
+                    Text("إلغاء", color = TextSecondaryDark)
                 }
             }
         }

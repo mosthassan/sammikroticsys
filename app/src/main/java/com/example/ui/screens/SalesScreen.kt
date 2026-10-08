@@ -90,7 +90,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import com.example.util.WhatsAppDispatcher
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -597,9 +599,46 @@ fun SalesScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                 Text("العميل / نقطة البيع:", fontSize = 12.sp, color = TextSecondaryDark)
-                                Text(party?.name ?: "عميل نقدي", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(party?.name ?: "عميل نقدي", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    party?.phone?.takeIf { it.isNotBlank() }?.let { phoneNum ->
+                                        val context = LocalContext.current
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Surface(
+                                            shape = RoundedCornerShape(4.dp),
+                                            color = Color(0xFF25D366).copy(alpha = 0.15f),
+                                            modifier = Modifier.clickable {
+                                                val summary = buildString {
+                                                    append("فاتورة مبيعات كروت #${inv.docNumber}\n")
+                                                    append("العميل: ${party.name}\n")
+                                                    append("الإجمالي: ${Money(inv.totalMinor, curr).format()}\n")
+                                                    append("المدفوع: ${Money(paidMinor, curr).format()}\n")
+                                                    if (remainingMinor > 0L) {
+                                                        append("المتبقي: ${Money(remainingMinor, curr).format()}\n")
+                                                    }
+                                                    append("شكراً لتعاملكم معنا - شبكة سبيكروتك")
+                                                }
+                                                WhatsAppDispatcher.sendTextMessage(context, phoneNum, summary)
+                                            }
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Send,
+                                                    contentDescription = "إرسال الفاتورة عبر واتساب",
+                                                    tint = Color(0xFF25D366),
+                                                    modifier = Modifier.size(10.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(2.dp))
+                                                Text("واتساب", fontSize = 9.sp, color = Color(0xFF25D366), fontWeight = FontWeight.Bold)
+                                            }
+                                        }
+                                    }
+                                }
                             }
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("إجمالي الفاتورة:", fontSize = 12.sp, color = TextSecondaryDark)
@@ -1411,6 +1450,7 @@ fun NewSalesInvoiceBottomSheet(
                         // Selected Client Active Card (Matching Image 1)
                         selectedParty?.let { party ->
                             val balance = partyBalances[party.id] ?: 0L
+                            val context = LocalContext.current
                             Surface(
                                 color = CyberDarkCardElevated,
                                 shape = RoundedCornerShape(10.dp),
@@ -1436,7 +1476,32 @@ fun NewSalesInvoiceBottomSheet(
                                         Column {
                                             Text(party.name, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = TextPrimaryDark)
                                             if (party.phone.isNotBlank()) {
-                                                Text(party.phone, fontSize = 10.sp, color = TextSecondaryDark)
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Text(party.phone, fontSize = 10.sp, color = TextSecondaryDark)
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Surface(
+                                                        shape = RoundedCornerShape(4.dp),
+                                                        color = Color(0xFF25D366).copy(alpha = 0.15f),
+                                                        modifier = Modifier.clickable {
+                                                            val msg = "مرحباً ${party.name}، بخصوص حسابك ومشتريات كروت الإنترنت في شبكة سبيكروتك."
+                                                            WhatsAppDispatcher.sendTextMessage(context, party.phone, msg)
+                                                        }
+                                                    ) {
+                                                        Row(
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                                        ) {
+                                                            Icon(
+                                                                Icons.Default.Send,
+                                                                contentDescription = "مراسلة واتساب",
+                                                                tint = Color(0xFF25D366),
+                                                                modifier = Modifier.size(10.dp)
+                                                            )
+                                                            Spacer(modifier = Modifier.width(2.dp))
+                                                            Text("واتساب", fontSize = 9.sp, color = Color(0xFF25D366), fontWeight = FontWeight.Bold)
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }
