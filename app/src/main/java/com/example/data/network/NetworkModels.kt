@@ -52,8 +52,23 @@ data class NetworkDevice(
     val frequency: String = "5500 MHz",
     val channelWidth: String = "20/40 MHz",
     val status: DeviceStatus = DeviceStatus.ONLINE,
-    val notes: String = ""
-)
+    val notes: String = "",
+    val model: String = "MikroTik RouterBOARD",
+    val managementPort: Int = 8728,
+    val subnet: String = "10.10.1.0/24",
+    val credentials: String = "admin"
+) {
+    val location: String get() = towerLocation
+
+    fun clone(customSuffix: String = " - نسخة"): NetworkDevice {
+        return this.copy(
+            id = UUID.randomUUID().toString(),
+            name = "$name$customSuffix",
+            ipAddress = "",
+            macAddress = ""
+        )
+    }
+}
 
 data class SubnetRange(
     val id: String = UUID.randomUUID().toString(),
@@ -70,7 +85,7 @@ sealed interface DeviceSaveResult {
     data class IpConflict(val conflictingDevice: NetworkDevice) : DeviceSaveResult
 }
 
-class NetworkRepository(private val context: Context) {
+class NetworkRepository(private val context: Context) : com.example.data.local.dao.DeviceDao {
 
     private val configFile = File(context.filesDir, "network_config.json")
     private val devicesFile = File(context.filesDir, "network_devices.json")
@@ -152,7 +167,11 @@ class NetworkRepository(private val context: Context) {
                             frequency = obj.optString("frequency", "5500 MHz"),
                             channelWidth = obj.optString("channelWidth", "20/40 MHz"),
                             status = runCatching { DeviceStatus.valueOf(obj.getString("status")) }.getOrDefault(DeviceStatus.ONLINE),
-                            notes = obj.optString("notes", "")
+                            notes = obj.optString("notes", ""),
+                            model = obj.optString("model", "MikroTik RouterBOARD"),
+                            managementPort = obj.optInt("managementPort", 8728),
+                            subnet = obj.optString("subnet", "10.10.1.0/24"),
+                            credentials = obj.optString("credentials", "admin")
                         )
                     )
                 }
@@ -212,6 +231,30 @@ class NetworkRepository(private val context: Context) {
         return initial
     }
 
+    override suspend fun findDeviceByIp(ip: String, currentDeviceId: Long): NetworkDevice? {
+        val cleanIp = ip.trim()
+        if (cleanIp.isBlank()) return null
+        return _devices.value.firstOrNull {
+            it.id.hashCode().toLong() != currentDeviceId && it.ipAddress.trim().equals(cleanIp, ignoreCase = true)
+        }
+    }
+
+    override suspend fun findDeviceByIp(ip: String, currentDeviceId: String): NetworkDevice? {
+        return findDeviceByIp(ip, excludeDeviceId = currentDeviceId)
+    }
+
+    override suspend fun getAllDevices(): List<NetworkDevice> {
+        return _devices.value
+    }
+
+    override suspend fun insertDevice(device: NetworkDevice) {
+        addOrUpdateDevice(device)
+    }
+
+    override suspend fun updateDevice(device: NetworkDevice) {
+        addOrUpdateDevice(device)
+    }
+
     fun findDeviceByIp(ip: String, excludeDeviceId: String? = null): NetworkDevice? {
         val cleanIp = ip.trim()
         if (cleanIp.isBlank()) return null
@@ -238,7 +281,7 @@ class NetworkRepository(private val context: Context) {
         DeviceSaveResult.Success(device)
     }
 
-    suspend fun deleteDevice(deviceId: String) = withContext(Dispatchers.IO) {
+    override suspend fun deleteDevice(deviceId: String) = withContext(Dispatchers.IO) {
         val current = _devices.value.filter { it.id != deviceId }
         saveDevicesInternal(current)
         _devices.value = current
@@ -282,6 +325,10 @@ class NetworkRepository(private val context: Context) {
                 put("channelWidth", d.channelWidth)
                 put("status", d.status.name)
                 put("notes", d.notes)
+                put("model", d.model)
+                put("managementPort", d.managementPort)
+                put("subnet", d.subnet)
+                put("credentials", d.credentials)
             }
             array.put(obj)
         }

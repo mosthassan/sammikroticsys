@@ -83,6 +83,8 @@ import com.example.data.network.NetworkConfig
 import com.example.data.network.NetworkDevice
 import com.example.data.network.NetworkRepository
 import com.example.data.network.SubnetRange
+import com.example.ui.components.AddEditDeviceDialog
+import com.example.ui.components.DeviceItemCard
 import com.example.ui.components.DeviceJsonBackupDialog
 import com.example.ui.theme.CyberBorder
 import com.example.ui.theme.CyberDarkCanvas
@@ -132,6 +134,7 @@ fun NetworkHubScreen(
     var activeTab by remember { mutableStateOf(0) } // 0: Identity/Config, 1: Security, 2: Devices, 3: Subnets, 4: Rates Hub
     var showDeviceBackupDialog by remember { mutableStateOf(false) }
     var deviceToEdit by remember { mutableStateOf<NetworkDevice?>(null) }
+    var isCloningDevice by remember { mutableStateOf(false) }
     var isAddingDevice by remember { mutableStateOf(false) }
     var subnetToEdit by remember { mutableStateOf<SubnetRange?>(null) }
     var isAddingSubnet by remember { mutableStateOf(false) }
@@ -208,8 +211,19 @@ fun NetworkHubScreen(
                 1 -> NetworkSecurityTab(config = config)
                 2 -> NetworkDevicesTab(
                     devices = devices,
-                    onAddDevice = { isAddingDevice = true },
-                    onEditDevice = { deviceToEdit = it },
+                    onAddDevice = {
+                        deviceToEdit = null
+                        isCloningDevice = false
+                        isAddingDevice = true
+                    },
+                    onEditDevice = {
+                        deviceToEdit = it
+                        isCloningDevice = false
+                    },
+                    onCloneDevice = {
+                        deviceToEdit = it
+                        isCloningDevice = true
+                    },
                     onDeleteDevice = { deviceId ->
                         scope.launch { networkRepository.deleteDevice(deviceId) }
                     },
@@ -243,8 +257,9 @@ fun NetworkHubScreen(
     }
 
     if (isAddingDevice || deviceToEdit != null) {
-        DeviceEditDialog(
+        AddEditDeviceDialog(
             device = deviceToEdit,
+            isCloning = isCloningDevice,
             existingDevices = devices,
             onSave = { savedDevice ->
                 scope.launch {
@@ -253,7 +268,13 @@ fun NetworkHubScreen(
                         is DeviceSaveResult.Success -> {
                             isAddingDevice = false
                             deviceToEdit = null
-                            Toast.makeText(context, "تم حفظ الجهاز '${savedDevice.name}' بنجاح", Toast.LENGTH_SHORT).show()
+                            isCloningDevice = false
+                            val msg = if (isCloningDevice) {
+                                "تم تكرار وحفظ الجهاز '${savedDevice.name}' بنجاح"
+                            } else {
+                                "تم حفظ الجهاز '${savedDevice.name}' بنجاح"
+                            }
+                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                         }
                         is DeviceSaveResult.IpConflict -> {
                             Toast.makeText(
@@ -268,6 +289,7 @@ fun NetworkHubScreen(
             onDismiss = {
                 isAddingDevice = false
                 deviceToEdit = null
+                isCloningDevice = false
             }
         )
     }
@@ -671,6 +693,7 @@ private fun NetworkDevicesTab(
     devices: List<NetworkDevice>,
     onAddDevice: () -> Unit,
     onEditDevice: (NetworkDevice) -> Unit,
+    onCloneDevice: (NetworkDevice) -> Unit,
     onDeleteDevice: (String) -> Unit,
     onOpenBackup: () -> Unit
 ) {
@@ -718,9 +741,10 @@ private fun NetworkDevicesTab(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 items(devices) { device ->
-                    DeviceCard(
+                    DeviceItemCard(
                         device = device,
                         onEdit = { onEditDevice(device) },
+                        onClone = { onCloneDevice(device) },
                         onDelete = { onDeleteDevice(device.id) }
                     )
                 }
