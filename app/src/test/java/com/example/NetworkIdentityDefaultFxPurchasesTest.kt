@@ -75,6 +75,14 @@ class NetworkIdentityDefaultFxPurchasesTest {
                     isCustomer = false
                 )
             )
+            db.partyDao().insertParty(
+                PartyEntity(
+                    id = "party_customer_1",
+                    name = "عميل تجريبي",
+                    isVendor = false,
+                    isCustomer = true
+                )
+            )
         }
     }
 

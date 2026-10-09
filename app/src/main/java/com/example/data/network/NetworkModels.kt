@@ -545,6 +545,11 @@ class NetworkRepository(private val context: Context) : com.example.data.local.d
         }
         subnetsFile.writeText(array.toString(2))
     }
+
+    suspend fun restoreSubnets(subnetsList: List<SubnetRange>) = withContext(Dispatchers.IO) {
+        saveSubnetsInternal(subnetsList)
+        _subnets.value = subnetsList
+    }
 }
 
 fun com.example.util.NetworkProfileBackupDto.toNetworkConfig(): NetworkConfig {

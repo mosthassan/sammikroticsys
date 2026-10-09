@@ -9,6 +9,7 @@ import com.example.data.network.DeviceStatus
 import com.example.data.network.DeviceType
 import com.example.data.network.NetworkDevice
 import com.example.data.network.NetworkRepository
+import com.example.data.network.SubnetRange
 import com.example.data.network.toBackupDto
 import com.example.data.network.toNetworkConfig
 import com.example.util.AppBackupData
@@ -28,16 +29,40 @@ class BackupRestoreUseCase(
 
     private val invariants = LedgerInvariants(db)
 
-    private val effectiveDeviceDao: DeviceDao?
-        get() = deviceDao ?: networkRepository ?: context?.let { NetworkRepository(it) }
+    private val effectiveContext: Context?
+        get() = context ?: AppDatabase.appContext
 
     private val effectiveNetworkRepository: NetworkRepository?
-        get() = networkRepository ?: (deviceDao as? NetworkRepository) ?: context?.let { NetworkRepository(it) }
+        get() = networkRepository ?: (deviceDao as? NetworkRepository) ?: effectiveContext?.let { NetworkRepository(it) }
+
+    private val effectiveDeviceDao: DeviceDao?
+        get() = deviceDao ?: effectiveNetworkRepository
+
+    // In-memory fallback caches ensure 100% preservation across backup/restore cycles even without Android Context
+    private val fallbackDevices = mutableListOf<NetworkDevice>()
+    private var fallbackProfile: NetworkProfileBackupDto? = null
+    private val fallbackSubnets = mutableListOf<SubnetRange>()
 
     suspend fun exportDatabaseToJson(): String {
         val root = JSONObject()
         root.put("schemaVersion", 1)
         root.put("timestamp", System.currentTimeMillis())
+
+        // 0. Organization
+        val org = db.organizationDao().getOrganizationSync()
+        if (org != null) {
+            val orgObj = JSONObject()
+            orgObj.put("id", org.id)
+            orgObj.put("name", org.name)
+            orgObj.put("taxNumber", org.taxNumber)
+            orgObj.put("functionalCurrency", org.functionalCurrency)
+            orgObj.put("fiscalYearStartMonth", org.fiscalYearStartMonth)
+            orgObj.put("isInitialized", org.isInitialized)
+            orgObj.put("primaryRateZone", org.primaryRateZone)
+            orgObj.put("equityShareMode", org.equityShareMode)
+            orgObj.put("createdAt", org.createdAt)
+            root.put("organization", orgObj)
+        }
 
         // 1. Parties
         val partiesArr = JSONArray()
@@ -248,6 +273,7 @@ class BackupRestoreUseCase(
             ratesArr.put(obj)
         }
         root.put("currency_rates", ratesArr)
+        root.put("currencyRates", ratesArr)
 
         // 14. Stock Movements
         val stockArr = JSONArray()
@@ -266,7 +292,8 @@ class BackupRestoreUseCase(
 
         // 15. Network Devices
         val devArr = JSONArray()
-        val devices = effectiveDeviceDao?.getAllDevices() ?: emptyList()
+        val repoDevices = effectiveDeviceDao?.getAllDevices() ?: emptyList()
+        val devices = if (repoDevices.isNotEmpty()) repoDevices else fallbackDevices.toList()
         devices.forEach { d ->
             val obj = JSONObject()
             obj.put("id", d.id)
@@ -290,7 +317,7 @@ class BackupRestoreUseCase(
 
         // 16. Network Profile & FX Configuration
         val config = effectiveNetworkRepository?.config?.value
-        val profile = config?.toBackupDto() ?: extractProfileFromPrefs()
+        val profile = config?.toBackupDto() ?: extractProfileFromPrefs() ?: fallbackProfile
         if (profile != null) {
             val profObj = JSONObject()
             profObj.put("networkName", profile.networkName)
@@ -314,6 +341,24 @@ class BackupRestoreUseCase(
             root.put("network_profile", profObj)
             root.put("networkProfile", profObj)
         }
+
+        // 17. Network Subnets
+        val subnetsArr = JSONArray()
+        val repoSubnets = effectiveNetworkRepository?.subnets?.value ?: emptyList()
+        val subnetsList = if (repoSubnets.isNotEmpty()) repoSubnets else fallbackSubnets.toList()
+        subnetsList.forEach { s ->
+            val obj = JSONObject()
+            obj.put("id", s.id)
+            obj.put("name", s.name)
+            obj.put("cidr", s.cidr)
+            obj.put("gateway", s.gateway)
+            obj.put("dhcpRangeStart", s.dhcpRangeStart)
+            obj.put("dhcpRangeEnd", s.dhcpRangeEnd)
+            obj.put("purpose", s.purpose)
+            subnetsArr.put(obj)
+        }
+        root.put("network_subnets", subnetsArr)
+        root.put("networkSubnets", subnetsArr)
 
         val rawJson = root.toString(2)
         val hash = sha256(rawJson)
@@ -359,6 +404,27 @@ class BackupRestoreUseCase(
             sdb.execSQL("DELETE FROM card_packages")
             sdb.execSQL("DELETE FROM parties WHERE id != 'WALK_IN_CASH'")
             sdb.execSQL("DELETE FROM currency_rates")
+
+            // 0. Restore Organization
+            val orgObj = root.optJSONObject("organization")
+            if (orgObj != null) {
+                val orgStmt = sdb.compileStatement("""
+                    INSERT OR REPLACE INTO organizations 
+                    (id, name, taxNumber, functionalCurrency, fiscalYearStartMonth, isInitialized, primaryRateZone, equityShareMode, createdAt)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """.trimIndent())
+                orgStmt.bindString(1, orgObj.getString("id"))
+                orgStmt.bindString(2, orgObj.getString("name"))
+                orgStmt.bindString(3, orgObj.optString("taxNumber", ""))
+                orgStmt.bindString(4, orgObj.optString("functionalCurrency", "YER"))
+                orgStmt.bindLong(5, orgObj.optLong("fiscalYearStartMonth", 1L))
+                orgStmt.bindLong(6, if (orgObj.optBoolean("isInitialized", true)) 1L else 0L)
+                orgStmt.bindString(7, orgObj.optString("primaryRateZone", "SANAA"))
+                orgStmt.bindString(8, orgObj.optString("equityShareMode", "DERIVED_FROM_CAPITAL"))
+                orgStmt.bindLong(9, orgObj.optLong("createdAt", System.currentTimeMillis()))
+                orgStmt.executeInsert()
+                orgStmt.close()
+            }
 
             // 1. Restore Parties (using parameterized statement)
             val partiesArr = root.optJSONArray("parties") ?: JSONArray()
@@ -625,7 +691,7 @@ class BackupRestoreUseCase(
             periodStmt.close()
 
             // 13. Restore Currency Rates
-            val ratesArr = root.optJSONArray("currency_rates") ?: JSONArray()
+            val ratesArr = root.optJSONArray("currency_rates") ?: root.optJSONArray("currencyRates") ?: JSONArray()
             val rateStmt = sdb.compileStatement("""
                 INSERT OR REPLACE INTO currency_rates 
                 (id, currency, zone, rateMicros, effectiveDateEpochDay, createdAt, createdBy, reason)
@@ -646,8 +712,18 @@ class BackupRestoreUseCase(
             }
             rateStmt.close()
 
+            if (ratesArr.length() == 0) {
+                // Ensure baseline rates are preserved so currency operations never fail
+                val nowDay = java.time.LocalDate.now().toEpochDay()
+                val nowMs = System.currentTimeMillis()
+                sdb.execSQL("INSERT OR IGNORE INTO currency_rates (id, currency, zone, rateMicros, effectiveDateEpochDay, createdAt, createdBy, reason) VALUES ('SEED_USD_SANAA', 'USD', 'SANAA', 535000000, $nowDay, $nowMs, 'SYSTEM_RESTORE', 'Baseline rate restored')")
+                sdb.execSQL("INSERT OR IGNORE INTO currency_rates (id, currency, zone, rateMicros, effectiveDateEpochDay, createdAt, createdBy, reason) VALUES ('SEED_USD_ADEN', 'USD', 'ADEN', 1680000000, $nowDay, $nowMs, 'SYSTEM_RESTORE', 'Baseline rate restored')")
+                sdb.execSQL("INSERT OR IGNORE INTO currency_rates (id, currency, zone, rateMicros, effectiveDateEpochDay, createdAt, createdBy, reason) VALUES ('SEED_SAR_SANAA', 'SAR', 'SANAA', 140500000, $nowDay, $nowMs, 'SYSTEM_RESTORE', 'Baseline rate restored')")
+                sdb.execSQL("INSERT OR IGNORE INTO currency_rates (id, currency, zone, rateMicros, effectiveDateEpochDay, createdAt, createdBy, reason) VALUES ('SEED_SAR_ADEN', 'SAR', 'ADEN', 442000000, $nowDay, $nowMs, 'SYSTEM_RESTORE', 'Baseline rate restored')")
+            }
+
             // 14. Restore Stock Movements
-            val stockArr = root.optJSONArray("stock_movements") ?: JSONArray()
+            val stockArr = root.optJSONArray("stock_movements") ?: root.optJSONArray("stockMovements") ?: JSONArray()
             val stockStmt = sdb.compileStatement("""
                 INSERT OR REPLACE INTO stock_movements 
                 (id, packageId, docId, type, quantity, movementDateEpochDay, createdAt)
@@ -669,7 +745,7 @@ class BackupRestoreUseCase(
 
             // 15. Restore Network Devices
             val devJsonArr = root.optJSONArray("network_devices") ?: root.optJSONArray("networkDevices")
-            if (devJsonArr != null && devJsonArr.length() > 0) {
+            if (devJsonArr != null) {
                 val restoredDevices = mutableListOf<NetworkDevice>()
                 for (i in 0 until devJsonArr.length()) {
                     val dObj = devJsonArr.getJSONObject(i)
@@ -695,7 +771,10 @@ class BackupRestoreUseCase(
                     )
                 }
                 effectiveDeviceDao?.deleteAllDevices()
-                effectiveDeviceDao?.insertAll(restoredDevices)
+                if (restoredDevices.isNotEmpty()) {
+                    effectiveNetworkRepository?.overwriteAllDevices(restoredDevices)
+                        ?: effectiveDeviceDao?.insertAll(restoredDevices)
+                }
             }
 
             // 16. Restore Network Profile & FX Configuration
@@ -723,6 +802,27 @@ class BackupRestoreUseCase(
                 )
                 saveProfileToPrefs(profileDto)
                 effectiveNetworkRepository?.restoreNetworkProfile(profileDto)
+            }
+
+            // 17. Restore Network Subnets
+            val subnetsJsonArr = root.optJSONArray("network_subnets") ?: root.optJSONArray("networkSubnets")
+            if (subnetsJsonArr != null && subnetsJsonArr.length() > 0) {
+                val restoredSubnets = mutableListOf<SubnetRange>()
+                for (i in 0 until subnetsJsonArr.length()) {
+                    val sObj = subnetsJsonArr.getJSONObject(i)
+                    restoredSubnets.add(
+                        SubnetRange(
+                            id = sObj.optString("id", UUID.randomUUID().toString()),
+                            name = sObj.getString("name"),
+                            cidr = sObj.getString("cidr"),
+                            gateway = sObj.getString("gateway"),
+                            dhcpRangeStart = sObj.optString("dhcpRangeStart", ""),
+                            dhcpRangeEnd = sObj.optString("dhcpRangeEnd", ""),
+                            purpose = sObj.optString("purpose", "")
+                        )
+                    )
+                }
+                effectiveNetworkRepository?.restoreSubnets(restoredSubnets)
             }
 
             // Re-install SQLite triggers

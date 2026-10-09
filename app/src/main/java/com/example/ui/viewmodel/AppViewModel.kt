@@ -95,7 +95,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     val statementsUseCase = FinancialStatementsUseCase(db)
     val statementOfAccountUseCase = StatementOfAccountUseCase(db)
-    val backupRestoreUseCase = BackupRestoreUseCase(db)
+    val backupRestoreUseCase = BackupRestoreUseCase(
+        db = db,
+        deviceDao = networkRepository,
+        networkRepository = networkRepository,
+        context = application
+    )
     val batchImportUseCase = BatchImportUseCase(db, writer)
     val exchangeRateResolver = ExchangeRateResolver(db)
     val partnerEquityUseCase = com.example.domain.usecase.PartnerEquityUseCase(db, writer)
@@ -110,9 +115,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     // Auth & Firebase Sync
     val authManager = AuthManager(application)
-    val syncManager = FirestoreSyncManager(application, db, backupRestoreUseCase)
+    val syncManager = FirestoreSyncManager(
+        context = application,
+        db = db,
+        backupRestoreUseCase = backupRestoreUseCase,
+        networkRepository = networkRepository
+    )
     val googleAuthManager = GoogleAuthManager(application)
-    val firebaseSyncManager = FirebaseSyncManager(application, db)
+    val firebaseSyncManager = FirebaseSyncManager(
+        context = application,
+        db = db,
+        backupRestoreUseCase = backupRestoreUseCase,
+        networkRepository = networkRepository
+    )
 
     val currentUser: StateFlow<UserSession?> = authManager.currentUser
     val authError: StateFlow<String?> = authManager.authError

@@ -26,7 +26,8 @@ data class CloudBackupMeta(
     val totalRecords: Int,
     val checksum: String,
     val networkDevicesCount: Int = 0,
-    val hasNetworkProfile: Boolean = false
+    val hasNetworkProfile: Boolean = false,
+    val currencyRatesCount: Int = 0
 )
 
 /**
@@ -78,6 +79,7 @@ class FirestoreSyncManager(
                 totalJournalLines = prefs.getInt("last_sync_lines", 0),
                 totalParties = prefs.getInt("last_sync_parties", 0),
                 totalPackages = prefs.getInt("last_sync_packages", 0),
+                totalCurrencyRates = prefs.getInt("last_sync_rates", 0),
                 totalDevices = prefs.getInt("last_sync_devices", 0),
                 hasNetworkProfile = prefs.getBoolean("last_sync_has_profile", false)
             )
@@ -120,11 +122,12 @@ class FirestoreSyncManager(
                     val parties = doc.getLong("partiesCount")?.toInt() ?: 0
                     val pkgs = doc.getLong("packagesCount")?.toInt() ?: 0
                     val treasuries = doc.getLong("treasuriesCount")?.toInt() ?: 0
+                    val rates = doc.getLong("currencyRatesCount")?.toInt() ?: 0
                     val devices = doc.getLong("networkDevicesCount")?.toInt() ?: 0
                     val hasProfile = doc.getBoolean("hasNetworkProfile") ?: (doc.get("networkProfile") != null)
                     val profileCount = if (hasProfile) 1 else 0
                     val total = doc.getLong("totalRecords")?.toInt()
-                        ?: (docs + lines + parties + pkgs + treasuries + devices + profileCount)
+                        ?: (docs + lines + parties + pkgs + treasuries + rates + devices + profileCount)
                     val checksum = doc.getString("checksum") ?: ""
                     return@withContext CloudBackupMeta(
                         uid = safeUid,
@@ -136,7 +139,8 @@ class FirestoreSyncManager(
                         totalRecords = total,
                         checksum = checksum,
                         networkDevicesCount = devices,
-                        hasNetworkProfile = hasProfile
+                        hasNetworkProfile = hasProfile,
+                        currencyRatesCount = rates
                     )
                 }
             }
@@ -181,21 +185,28 @@ class FirestoreSyncManager(
             val linesArr = root.optJSONArray("journal_lines")
             val allocArr = root.optJSONArray("allocations")
             val assetsArr = root.optJSONArray("assets")
-            val ratesArr = root.optJSONArray("currency_rates")
+            val ratesArr = root.optJSONArray("currency_rates") ?: root.optJSONArray("currencyRates")
             val devicesArr = root.optJSONArray("network_devices") ?: root.optJSONArray("networkDevices")
             val profileObj = root.optJSONObject("network_profile") ?: root.optJSONObject("networkProfile")
+            val subnetsArr = root.optJSONArray("network_subnets") ?: root.optJSONArray("networkSubnets")
+            val orgObj = root.optJSONObject("organization")
             val checksum = root.optString("sha256", "")
 
             val devicesCount = devicesArr?.length() ?: 0
+            val ratesCount = ratesArr?.length() ?: 0
             val profileCount = if (profileObj != null) 1 else 0
+            val subnetsCount = subnetsArr?.length() ?: 0
 
             val totalRecords = (partiesArr?.length() ?: 0) +
                     (pkgsArr?.length() ?: 0) +
                     (docsArr?.length() ?: 0) +
                     (linesArr?.length() ?: 0) +
                     (treasuriesArr?.length() ?: 0) +
+                    ratesCount +
                     devicesCount +
-                    profileCount
+                    profileCount +
+                    subnetsCount +
+                    (if (orgObj != null) 1 else 0)
 
             _syncState.value = SyncState.InProgress("الاتصال بالسحابة: users/$safeUid/backup_latest...", 0.4f)
 
@@ -226,6 +237,43 @@ class FirestoreSyncManager(
                 }
             }
 
+            val currencyRatesListMap = mutableListOf<Map<String, Any?>>()
+            if (ratesArr != null) {
+                for (i in 0 until ratesArr.length()) {
+                    val r = ratesArr.getJSONObject(i)
+                    currencyRatesListMap.add(
+                        mapOf(
+                            "id" to r.getString("id"),
+                            "currency" to r.optString("currency", "USD"),
+                            "zone" to r.optString("zone", "SANAA"),
+                            "rateMicros" to r.getLong("rateMicros"),
+                            "effectiveDateEpochDay" to r.getLong("effectiveDateEpochDay"),
+                            "createdAt" to r.optLong("createdAt", System.currentTimeMillis()),
+                            "createdBy" to r.optString("createdBy", "SYSTEM"),
+                            "reason" to r.optString("reason", "")
+                        )
+                    )
+                }
+            }
+
+            val subnetsListMap = mutableListOf<Map<String, Any?>>()
+            if (subnetsArr != null) {
+                for (i in 0 until subnetsArr.length()) {
+                    val s = subnetsArr.getJSONObject(i)
+                    subnetsListMap.add(
+                        mapOf(
+                            "id" to s.getString("id"),
+                            "name" to s.getString("name"),
+                            "cidr" to s.getString("cidr"),
+                            "gateway" to s.getString("gateway"),
+                            "dhcpRangeStart" to s.optString("dhcpRangeStart", ""),
+                            "dhcpRangeEnd" to s.optString("dhcpRangeEnd", ""),
+                            "purpose" to s.optString("purpose", "")
+                        )
+                    )
+                }
+            }
+
             val profileMap = profileObj?.let { p ->
                 mapOf(
                     "networkName" to p.optString("networkName"),
@@ -249,6 +297,20 @@ class FirestoreSyncManager(
                 )
             }
 
+            val organizationMap = orgObj?.let { o ->
+                mapOf(
+                    "id" to o.getString("id"),
+                    "name" to o.getString("name"),
+                    "taxNumber" to o.optString("taxNumber", ""),
+                    "functionalCurrency" to o.optString("functionalCurrency", "YER"),
+                    "fiscalYearStartMonth" to o.optInt("fiscalYearStartMonth", 1),
+                    "isInitialized" to o.optBoolean("isInitialized", true),
+                    "primaryRateZone" to o.optString("primaryRateZone", "SANAA"),
+                    "equityShareMode" to o.optString("equityShareMode", "DERIVED_FROM_CAPITAL"),
+                    "createdAt" to o.optLong("createdAt", System.currentTimeMillis())
+                )
+            }
+
             val backupData = hashMapOf(
                 "schemaVersion" to 1,
                 "uid" to safeUid,
@@ -265,12 +327,16 @@ class FirestoreSyncManager(
                 "journalLinesCount" to (linesArr?.length() ?: 0),
                 "allocationsCount" to (allocArr?.length() ?: 0),
                 "assetsCount" to (assetsArr?.length() ?: 0),
-                "currencyRatesCount" to (ratesArr?.length() ?: 0),
+                "currencyRatesCount" to ratesCount,
                 "networkDevicesCount" to devicesCount,
+                "networkSubnetsCount" to subnetsCount,
                 "hasNetworkProfile" to (profileCount > 0),
                 "totalRecords" to totalRecords,
                 "networkDevices" to devicesListMap,
-                "networkProfile" to profileMap
+                "currencyRates" to currencyRatesListMap,
+                "networkSubnets" to subnetsListMap,
+                "networkProfile" to profileMap,
+                "organization" to organizationMap
             )
 
             // Primary user scoped destination: users/{uid}/backup_latest/latest
@@ -287,7 +353,10 @@ class FirestoreSyncManager(
                 "hasBackup" to true,
                 "documentsCount" to (docsArr?.length() ?: 0),
                 "journalLinesCount" to (linesArr?.length() ?: 0),
+                "currencyRatesCount" to ratesCount,
                 "networkDevicesCount" to devicesCount,
+                "networkSubnetsCount" to subnetsCount,
+                "hasNetworkProfile" to (profileCount > 0),
                 "totalRecords" to totalRecords,
                 "checksum" to checksum
             )
@@ -313,6 +382,7 @@ class FirestoreSyncManager(
                 .putInt("last_sync_lines", linesArr?.length() ?: 0)
                 .putInt("last_sync_parties", partiesArr?.length() ?: 0)
                 .putInt("last_sync_packages", pkgsArr?.length() ?: 0)
+                .putInt("last_sync_rates", ratesCount)
                 .putInt("last_sync_devices", devicesCount)
                 .putBoolean("last_sync_has_profile", profileCount > 0)
                 .putInt("last_sync_total_records", totalRecords)
@@ -325,6 +395,7 @@ class FirestoreSyncManager(
                 totalJournalLines = linesArr?.length() ?: 0,
                 totalParties = partiesArr?.length() ?: 0,
                 totalPackages = pkgsArr?.length() ?: 0,
+                totalCurrencyRates = ratesCount,
                 totalDevices = devicesCount,
                 hasNetworkProfile = profileCount > 0,
                 isBalanced = true,
@@ -414,7 +485,11 @@ class FirestoreSyncManager(
             val linesCount = snapshotDoc.getLong("journalLinesCount")?.toInt() ?: 0
             val partiesCount = snapshotDoc.getLong("partiesCount")?.toInt() ?: 0
             val packagesCount = snapshotDoc.getLong("packagesCount")?.toInt() ?: 0
-            val totalRecords = docsCount + linesCount + partiesCount + packagesCount
+            val ratesCount = snapshotDoc.getLong("currencyRatesCount")?.toInt() ?: 0
+            val devicesCount = snapshotDoc.getLong("networkDevicesCount")?.toInt() ?: 0
+            val hasProfile = snapshotDoc.getBoolean("hasNetworkProfile") ?: (snapshotDoc.get("networkProfile") != null)
+            val profileCount = if (hasProfile) 1 else 0
+            val totalRecords = docsCount + linesCount + partiesCount + packagesCount + ratesCount + devicesCount + profileCount
 
             prefs.edit()
                 .putLong("last_sync_timestamp", now)
@@ -423,6 +498,10 @@ class FirestoreSyncManager(
                 .putInt("last_sync_lines", linesCount)
                 .putInt("last_sync_parties", partiesCount)
                 .putInt("last_sync_packages", packagesCount)
+                .putInt("last_sync_rates", ratesCount)
+                .putInt("last_sync_devices", devicesCount)
+                .putBoolean("last_sync_has_profile", hasProfile)
+                .putInt("last_sync_total_records", totalRecords)
                 .apply()
 
             _syncMetadata.value = SyncMetadata(
@@ -432,7 +511,11 @@ class FirestoreSyncManager(
                 totalJournalLines = linesCount,
                 totalParties = partiesCount,
                 totalPackages = packagesCount,
-                isBalanced = true
+                totalCurrencyRates = ratesCount,
+                totalDevices = devicesCount,
+                hasNetworkProfile = hasProfile,
+                isBalanced = true,
+                checksum = snapshotDoc.getString("checksum") ?: ""
             )
 
             val successMsg = "تمت استعادة $totalRecords سجلاً من السحابة بنجاح ومطابقة دفتر اليومية 100%"

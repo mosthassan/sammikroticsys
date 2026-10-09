@@ -103,13 +103,18 @@ abstract class AppDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
+        @Volatile
+        var appContext: Context? = null
+
         fun getInstance(context: Context): AppDatabase {
+            appContext = context.applicationContext
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: buildDatabase(context).also { INSTANCE = it }
             }
         }
 
         private fun buildDatabase(context: Context): AppDatabase {
+            appContext = context.applicationContext
             return Room.databaseBuilder(
                 context.applicationContext,
                 AppDatabase::class.java,
@@ -122,6 +127,7 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         fun createInMemory(context: Context): AppDatabase {
+            appContext = context.applicationContext
             return Room.inMemoryDatabaseBuilder(
                 context.applicationContext,
                 AppDatabase::class.java

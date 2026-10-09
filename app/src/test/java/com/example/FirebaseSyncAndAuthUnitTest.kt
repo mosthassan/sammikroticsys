@@ -117,4 +117,98 @@ class FirebaseSyncAndAuthUnitTest {
         assertEquals(190_000_00L, adenYer) // 190,000.00 YER
         assertTrue(adenYer > sanaaYer)
     }
+
+    @Test
+    fun testCompleteBackupIncludesNetworkProfileExchangeRatesAndDevices() = kotlinx.coroutines.runBlocking {
+        val repo = com.example.data.network.NetworkRepository(context)
+
+        // 1. Configure custom network identity (هوية الشبكة)
+        val customConfig = com.example.data.network.NetworkConfig(
+            networkName = "شبكة سام العالمية للألياف",
+            ownerName = "المهندس مصطفى حسان",
+            location = "صنعاء - برج نقم",
+            rateZone = com.example.core.model.RateZone.SANAA,
+            defaultUsdRateMicros = 540_000_000L,
+            defaultSarRateMicros = 142_000_000L
+        )
+        repo.saveConfig(customConfig)
+
+        // 2. Add custom exchange rates (سعر الصرف)
+        val testRate = com.example.data.local.entity.CurrencyRateEntity(
+            id = "RATE_TEST_CUSTOM",
+            currency = "USD",
+            zone = "ADEN",
+            rateMicros = 1_920_000_000L,
+            effectiveDateEpochDay = java.time.LocalDate.now().toEpochDay(),
+            reason = "سعر إغلاق السوق في عدن"
+        )
+        db.currencyRateDao().insertRate(testRate)
+
+        // 3. Add custom network devices (أجهزة الشبكة)
+        val testDevice = com.example.data.network.NetworkDevice(
+            id = "DEV_TEST_001",
+            name = "سيكتور برج النصر mANTBox",
+            ipAddress = "10.10.88.1",
+            deviceType = com.example.data.network.DeviceType.ACCESS_POINT,
+            macAddress = "AA:BB:CC:DD:EE:FF",
+            towerLocation = "برج النصر المركزي"
+        )
+        repo.addOrUpdateDevice(testDevice)
+
+        // 4. Create BackupRestoreUseCase with all components
+        val useCase = com.example.domain.usecase.BackupRestoreUseCase(
+            db = db,
+            deviceDao = repo,
+            networkRepository = repo,
+            context = context
+        )
+
+        // 5. Export JSON
+        val exportedJson = useCase.exportDatabaseToJson()
+        assertNotNull(exportedJson)
+
+        // Assert JSON contains Network Profile, Exchange Rates, and Network Devices
+        assertTrue("Backup must include network identity name", exportedJson.contains("شبكة سام العالمية للألياف"))
+        assertTrue("Backup must include network owner", exportedJson.contains("المهندس مصطفى حسان"))
+        assertTrue("Backup must include custom USD micro-rate", exportedJson.contains("540000000"))
+        assertTrue("Backup must include currency_rates", exportedJson.contains("currency_rates") || exportedJson.contains("currencyRates"))
+        assertTrue("Backup must include custom exchange rate value", exportedJson.contains("1920000000"))
+        assertTrue("Backup must include network_devices", exportedJson.contains("network_devices") || exportedJson.contains("networkDevices"))
+        assertTrue("Backup must include custom device name", exportedJson.contains("سيكتور برج النصر mANTBox"))
+        assertTrue("Backup must include custom device IP", exportedJson.contains("10.10.88.1"))
+
+        // 6. Restore into fresh database & repo
+        val freshDb = AppDatabase.createInMemory(context)
+        val freshRepo = com.example.data.network.NetworkRepository(context)
+        val restoreUseCase = com.example.domain.usecase.BackupRestoreUseCase(
+            db = freshDb,
+            deviceDao = freshRepo,
+            networkRepository = freshRepo,
+            context = context
+        )
+
+        val restoreResult = restoreUseCase.restoreDatabaseFromJson(exportedJson)
+        assertTrue("Restore must succeed: ${restoreResult.exceptionOrNull()?.message}", restoreResult.isSuccess)
+
+        // Verify Network Profile restored
+        assertEquals("شبكة سام العالمية للألياف", freshRepo.config.value.networkName)
+        assertEquals("المهندس مصطفى حسان", freshRepo.config.value.ownerName)
+        assertEquals(540_000_000L, freshRepo.config.value.defaultUsdRateMicros)
+
+        // Verify Network Devices restored
+        val restoredDevices = freshRepo.devices.value
+        val foundDevice = restoredDevices.firstOrNull { it.id == "DEV_TEST_001" || it.ipAddress == "10.10.88.1" }
+        assertNotNull("Restored network device must be present", foundDevice)
+        assertEquals("سيكتور برج النصر mANTBox", foundDevice!!.name)
+        assertEquals("10.10.88.1", foundDevice.ipAddress)
+
+        // Verify Currency Rates restored
+        val restoredRates = freshDb.currencyRateDao().getAllRatesSync()
+        val foundRate = restoredRates.firstOrNull { it.rateMicros == 1_920_000_000L }
+        assertNotNull("Restored currency rate must be present in DB", foundRate)
+        assertEquals("USD", foundRate!!.currency)
+        assertEquals("ADEN", foundRate.zone)
+
+        freshDb.close()
+    }
 }
