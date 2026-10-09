@@ -50,6 +50,7 @@ import com.example.domain.usecase.AgingReport
 import com.example.domain.usecase.BackupRestoreUseCase
 import com.example.domain.usecase.BalanceSheetReport
 import com.example.domain.usecase.BatchImportUseCase
+import com.example.domain.usecase.DualCurrencyTrialBalanceReport
 import com.example.domain.usecase.FinancialStatementsUseCase
 import com.example.domain.usecase.ImportBatchReport
 import com.example.domain.usecase.IncomeStatementReport
@@ -95,16 +96,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     val statementsUseCase = FinancialStatementsUseCase(db)
     val statementOfAccountUseCase = StatementOfAccountUseCase(db)
-    val backupRestoreUseCase = BackupRestoreUseCase(
-        db = db,
-        deviceDao = networkRepository,
-        networkRepository = networkRepository,
-        context = application
-    )
+    val backupRestoreUseCase = BackupRestoreUseCase(db, networkRepository)
     val batchImportUseCase = BatchImportUseCase(db, writer)
     val exchangeRateResolver = ExchangeRateResolver(db)
     val partnerEquityUseCase = com.example.domain.usecase.PartnerEquityUseCase(db, writer)
-    val periodicRevaluationUseCase = com.example.domain.usecase.PeriodicRevaluationUseCase(db, writer, exchangeRateResolver)
+    val periodicRevaluationUseCase = com.example.domain.usecase.PeriodicRevaluationUseCase(db, exchangeRateResolver)
 
     // Organization & Exchange Rates
     val organization: StateFlow<OrganizationEntity?> = db.organizationDao().getOrganizationFlow()
@@ -115,19 +111,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     // Auth & Firebase Sync
     val authManager = AuthManager(application)
-    val syncManager = FirestoreSyncManager(
-        context = application,
-        db = db,
-        backupRestoreUseCase = backupRestoreUseCase,
-        networkRepository = networkRepository
-    )
+    val syncManager = FirestoreSyncManager(application, db, backupRestoreUseCase)
     val googleAuthManager = GoogleAuthManager(application)
-    val firebaseSyncManager = FirebaseSyncManager(
-        context = application,
-        db = db,
-        backupRestoreUseCase = backupRestoreUseCase,
-        networkRepository = networkRepository
-    )
+    val firebaseSyncManager = FirebaseSyncManager(application, db, syncManager)
 
     val currentUser: StateFlow<UserSession?> = authManager.currentUser
     val authError: StateFlow<String?> = authManager.authError
@@ -191,6 +177,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _agingReport = MutableStateFlow<AgingReport?>(null)
     val agingReport: StateFlow<AgingReport?> = _agingReport.asStateFlow()
+
+    private val _dualCurrencyTrialBalance = MutableStateFlow<DualCurrencyTrialBalanceReport?>(null)
+    val dualCurrencyTrialBalance: StateFlow<DualCurrencyTrialBalanceReport?> = _dualCurrencyTrialBalance.asStateFlow()
 
     private val _currentPartyStatement = MutableStateFlow<StatementOfAccountReport?>(null)
     val currentPartyStatement: StateFlow<StatementOfAccountReport?> = _currentPartyStatement.asStateFlow()
@@ -434,8 +423,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         exchangeRate: ExchangeRate,
         allocations: List<InvoiceAllocationSpec>,
         notes: String,
-        rateZone: RateZone = RateZone.DEFAULT,
-        rateSource: com.example.core.model.RateSource = com.example.core.model.RateSource.SYSTEM_DAILY,
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
@@ -452,9 +439,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     currency = currency,
                     exchangeRate = exchangeRate,
                     allocations = allocations,
-                    notes = notes,
-                    rateZone = rateZone,
-                    rateSource = rateSource
+                    notes = notes
                 )
                 _userMessage.emit("تم ترحيل سند القبض وتخصيصه بنجاح")
                 refreshDashboard()
@@ -475,8 +460,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         customExpenseCode: String? = null,
         invoiceAllocations: List<InvoiceAllocationSpec> = emptyList(),
         notes: String,
-        rateZone: RateZone = RateZone.DEFAULT,
-        rateSource: com.example.core.model.RateSource = com.example.core.model.RateSource.SYSTEM_DAILY,
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
@@ -495,9 +478,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     paymentType = paymentType,
                     customExpenseCode = customExpenseCode,
                     invoiceAllocations = invoiceAllocations,
-                    notes = notes,
-                    rateZone = rateZone,
-                    rateSource = rateSource
+                    notes = notes
                 )
                 _userMessage.emit("تم ترحيل سند الصرف بنجاح")
                 refreshDashboard()
@@ -624,35 +605,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         return db.documentDao().getDocumentsByPartyFlow(partyId)
     }
 
-    fun runPeriodicRevaluation(
-        fiscalYear: Int = getLocalNow().year,
-        dateEpochDay: Long = getLocalNow().toEpochDay(),
-        rateZone: RateZone = RateZone.SANAA,
-        notes: String? = null
-    ) {
-        viewModelScope.launch {
-            try {
-                val docs = periodicRevaluationUseCase.executePeriodicRevaluationRun(
-                    fiscalYear = fiscalYear,
-                    dateEpochDay = dateEpochDay,
-                    rateZone = rateZone,
-                    notes = notes
-                )
-                _userMessage.emit("تم تنفيذ إعادة التقييم الدوري بنجاح (${docs.size} قيد تم ترحيله)")
-                refreshDashboard()
-            } catch (e: Exception) {
-                _userMessage.emit("فشل إعادة التقييم الدوري: ${e.message}")
-            }
-        }
-    }
-
     fun postPurchaseInvoice(
         vendorPartyId: String,
         currency: CurrencyCode,
         exchangeRate: ExchangeRate,
         items: List<PurchaseItemSpec>,
         notes: String,
-        rateZone: RateZone = RateZone.DEFAULT,
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
@@ -667,8 +625,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     currency = currency,
                     exchangeRate = exchangeRate,
                     items = items,
-                    notes = notes,
-                    rateZone = rateZone
+                    notes = notes
                 )
                 _userMessage.emit("تم ترحيل فاتورة المشتريات وتسجيل الأصول إن وُجدت")
                 refreshDashboard()
@@ -1053,6 +1010,46 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun loadDualCurrencyTrialBalance() {
+        viewModelScope.launch {
+            val rep = statementsUseCase.generateDualCurrencyTrialBalance()
+            _dualCurrencyTrialBalance.value = rep
+        }
+    }
+
+    fun executePeriodicRevaluation(
+        asOfDateEpochDay: Long,
+        fiscalYear: Int,
+        rateZone: RateZone = RateZone.DEFAULT,
+        memo: String = "",
+        onSuccess: (com.example.domain.usecase.RevaluationResult) -> Unit = {},
+        onError: (Throwable) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            try {
+                val result = periodicRevaluationUseCase.executeRevaluation(
+                    asOfDateEpochDay = asOfDateEpochDay,
+                    fiscalYear = fiscalYear,
+                    rateZone = rateZone,
+                    memo = memo
+                )
+                if (result.document != null) {
+                    _userMessage.emit("تم ترحيل قيد إعادة التقييم الدوري بنجاح بمستند رقم #${result.document.docNumber}")
+                } else {
+                    _userMessage.emit("لا توجد بنود نقدية أجنبية تتطلب إعادة تقييم في هذا التاريخ")
+                }
+                refreshDashboard()
+                loadIncomeStatement(null, asOfDateEpochDay)
+                loadBalanceSheet(asOfDateEpochDay)
+                loadDualCurrencyTrialBalance()
+                onSuccess(result)
+            } catch (e: Throwable) {
+                _userMessage.emit("تعذر تنفيذ إعادة التقييم: ${e.message}")
+                onError(e)
+            }
+        }
+    }
+
     fun insertParty(party: PartyEntity, onSuccess: () -> Unit) {
         viewModelScope.launch {
             try {
@@ -1061,18 +1058,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 onSuccess()
             } catch (e: Exception) {
                 _userMessage.emit("فشل إضافة الطرف: ${e.message}")
-            }
-        }
-    }
-
-    fun updateParty(party: PartyEntity, onSuccess: () -> Unit) {
-        viewModelScope.launch {
-            try {
-                repository.updateParty(party)
-                _userMessage.emit("تم تحديث بيانات الطرف بنجاح")
-                onSuccess()
-            } catch (e: Exception) {
-                _userMessage.emit("فشل تحديث بيانات الطرف: ${e.message}")
             }
         }
     }

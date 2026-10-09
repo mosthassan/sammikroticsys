@@ -6,6 +6,7 @@ import com.example.data.auth.GoogleAuthManager
 import com.example.data.auth.UserProfile
 import com.example.data.local.AppDatabase
 import com.example.data.sync.FirebaseSyncManager
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -119,96 +120,107 @@ class FirebaseSyncAndAuthUnitTest {
     }
 
     @Test
-    fun testCompleteBackupIncludesNetworkProfileExchangeRatesAndDevices() = kotlinx.coroutines.runBlocking {
-        val repo = com.example.data.network.NetworkRepository(context)
+    fun testCompleteBackupAndRestoreCoversAllTabsAndEntities() = kotlinx.coroutines.runBlocking {
+        val netRepo = com.example.data.network.NetworkRepository(context)
+        val backupUseCase = com.example.domain.usecase.BackupRestoreUseCase(db, netRepo)
 
-        // 1. Configure custom network identity (هوية الشبكة)
+        // 1. Setup Network Config (هوية الشبكة)
         val customConfig = com.example.data.network.NetworkConfig(
-            networkName = "شبكة سام العالمية للألياف",
-            ownerName = "المهندس مصطفى حسان",
-            location = "صنعاء - برج نقم",
-            rateZone = com.example.core.model.RateZone.SANAA,
-            defaultUsdRateMicros = 540_000_000L,
-            defaultSarRateMicros = 142_000_000L
+            networkName = "شبكة سام العالمية للاختبار",
+            ownerName = "المهندس مصطفى",
+            mainRouterModel = "MikroTik CCR2116",
+            routerOsVersion = "v7.17",
+            supportPhone = "771234567"
         )
-        repo.saveConfig(customConfig)
+        netRepo.saveConfig(customConfig)
 
-        // 2. Add custom exchange rates (سعر الصرف)
-        val testRate = com.example.data.local.entity.CurrencyRateEntity(
-            id = "RATE_TEST_CUSTOM",
-            currency = "USD",
-            zone = "ADEN",
-            rateMicros = 1_920_000_000L,
-            effectiveDateEpochDay = java.time.LocalDate.now().toEpochDay(),
-            reason = "سعر إغلاق السوق في عدن"
-        )
-        db.currencyRateDao().insertRate(testRate)
-
-        // 3. Add custom network devices (أجهزة الشبكة)
+        // 2. Setup Network Devices (أجهزة ميكروتك)
         val testDevice = com.example.data.network.NetworkDevice(
-            id = "DEV_TEST_001",
-            name = "سيكتور برج النصر mANTBox",
-            ipAddress = "10.10.88.1",
-            deviceType = com.example.data.network.DeviceType.ACCESS_POINT,
-            macAddress = "AA:BB:CC:DD:EE:FF",
-            towerLocation = "برج النصر المركزي"
+            id = "DEV_TEST_101",
+            name = "راوتر سيرفر رئيسي 2116",
+            ipAddress = "10.10.99.1",
+            deviceType = com.example.data.network.DeviceType.ROUTER,
+            macAddress = "E4:8D:8C:00:11:22",
+            towerLocation = "برج القمة",
+            frequency = "Core Fiber",
+            status = com.example.data.network.DeviceStatus.ONLINE,
+            notes = "جهاز التوجيه الرئيسي"
         )
-        repo.addOrUpdateDevice(testDevice)
+        netRepo.addOrUpdateDevice(testDevice)
 
-        // 4. Create BackupRestoreUseCase with all components
-        val useCase = com.example.domain.usecase.BackupRestoreUseCase(
-            db = db,
-            deviceDao = repo,
-            networkRepository = repo,
-            context = context
+        // 3. Setup Organization (هوية المنشأة)
+        val existingOrg = db.organizationDao().getOrganizationSync()
+        if (existingOrg != null) {
+            db.organizationDao().updateOrganization(existingOrg.copy(name = "مؤسسة سام تيك للإنترنت"))
+        } else {
+            val org = com.example.data.local.entity.OrganizationEntity(
+                id = "ORG_TEST_1",
+                name = "مؤسسة سام تيك للإنترنت",
+                functionalCurrency = "YER",
+                primaryRateZone = "SANAA",
+                isInitialized = true
+            )
+            db.organizationDao().insertOrganization(org)
+        }
+
+        // 4. Setup Currency Rate (أسعار الصرف)
+        val rate = com.example.data.local.entity.CurrencyRateEntity(
+            id = "RATE_USD_TEST_99",
+            currency = "USD",
+            zone = "SANAA",
+            rateMicros = 535_000_000L,
+            effectiveDateEpochDay = 20000L,
+            createdBy = "ADMIN",
+            reason = "سعر صرف اختباري"
         )
+        db.currencyRateDao().insertRate(rate)
 
-        // 5. Export JSON
-        val exportedJson = useCase.exportDatabaseToJson()
-        assertNotNull(exportedJson)
-
-        // Assert JSON contains Network Profile, Exchange Rates, and Network Devices
-        assertTrue("Backup must include network identity name", exportedJson.contains("شبكة سام العالمية للألياف"))
-        assertTrue("Backup must include network owner", exportedJson.contains("المهندس مصطفى حسان"))
-        assertTrue("Backup must include custom USD micro-rate", exportedJson.contains("540000000"))
-        assertTrue("Backup must include currency_rates", exportedJson.contains("currency_rates") || exportedJson.contains("currencyRates"))
-        assertTrue("Backup must include custom exchange rate value", exportedJson.contains("1920000000"))
-        assertTrue("Backup must include network_devices", exportedJson.contains("network_devices") || exportedJson.contains("networkDevices"))
-        assertTrue("Backup must include custom device name", exportedJson.contains("سيكتور برج النصر mANTBox"))
-        assertTrue("Backup must include custom device IP", exportedJson.contains("10.10.88.1"))
-
-        // 6. Restore into fresh database & repo
-        val freshDb = AppDatabase.createInMemory(context)
-        val freshRepo = com.example.data.network.NetworkRepository(context)
-        val restoreUseCase = com.example.domain.usecase.BackupRestoreUseCase(
-            db = freshDb,
-            deviceDao = freshRepo,
-            networkRepository = freshRepo,
-            context = context
+        // 5. Setup Party (عميل / وكيل)
+        val party = com.example.data.local.entity.PartyEntity(
+            id = "PARTY_TEST_99",
+            name = "وكالة النور الرقمية",
+            phone = "778899000",
+            isCustomer = true
         )
+        db.partyDao().insertParty(party)
 
-        val restoreResult = restoreUseCase.restoreDatabaseFromJson(exportedJson)
-        assertTrue("Restore must succeed: ${restoreResult.exceptionOrNull()?.message}", restoreResult.isSuccess)
+        // 6. Export Complete Database
+        val jsonString = backupUseCase.exportDatabaseToJson()
+        val jsonRoot = JSONObject(jsonString)
 
-        // Verify Network Profile restored
-        assertEquals("شبكة سام العالمية للألياف", freshRepo.config.value.networkName)
-        assertEquals("المهندس مصطفى حسان", freshRepo.config.value.ownerName)
-        assertEquals(540_000_000L, freshRepo.config.value.defaultUsdRateMicros)
+        // Verify JSON includes all tabs
+        assertTrue("يجب أن يحتوي التصدير على هوية المنشأة", jsonRoot.has("organization"))
+        assertEquals("مؤسسة سام تيك للإنترنت", jsonRoot.getJSONObject("organization").getString("name"))
 
-        // Verify Network Devices restored
-        val restoredDevices = freshRepo.devices.value
-        val foundDevice = restoredDevices.firstOrNull { it.id == "DEV_TEST_001" || it.ipAddress == "10.10.88.1" }
-        assertNotNull("Restored network device must be present", foundDevice)
-        assertEquals("سيكتور برج النصر mANTBox", foundDevice!!.name)
-        assertEquals("10.10.88.1", foundDevice.ipAddress)
+        assertTrue("يجب أن يحتوي التصدير على بيانات الشبكة", jsonRoot.has("network_hub"))
+        val netHubJson = jsonRoot.getJSONObject("network_hub")
+        assertEquals("شبكة سام العالمية للاختبار", netHubJson.getJSONObject("config").getString("networkName"))
+        assertTrue("يجب أن يحتوي التصدير على الأجهزة", netHubJson.getJSONArray("devices").length() > 0)
 
-        // Verify Currency Rates restored
-        val restoredRates = freshDb.currencyRateDao().getAllRatesSync()
-        val foundRate = restoredRates.firstOrNull { it.rateMicros == 1_920_000_000L }
-        assertNotNull("Restored currency rate must be present in DB", foundRate)
-        assertEquals("USD", foundRate!!.currency)
-        assertEquals("ADEN", foundRate.zone)
+        assertTrue("يجب أن يحتوي التصدير على أسعار الصرف", jsonRoot.has("currency_rates"))
+        assertTrue("يجب أن يحتوي التصدير على العملاء والأطراف", jsonRoot.has("parties"))
 
-        freshDb.close()
+        // 7. Restore into a fresh Database instance and fresh NetworkRepository
+        val newDb = AppDatabase.createInMemory(context)
+        val newNetRepo = com.example.data.network.NetworkRepository(context)
+        val restoreUseCase = com.example.domain.usecase.BackupRestoreUseCase(newDb, newNetRepo)
+
+        val restoreResult = restoreUseCase.restoreDatabaseFromJson(jsonString)
+        assertTrue("يجب أن تنجح الاستعادة الكاملة", restoreResult.isSuccess)
+
+        // 8. Assertions on restored state
+        val restoredOrg = newDb.organizationDao().getOrganizationSync()
+        assertNotNull("يجب استعادة هوية المنشأة", restoredOrg)
+        assertEquals("مؤسسة سام تيك للإنترنت", restoredOrg?.name)
+
+        val restoredRates = newDb.currencyRateDao().getAllRatesSync()
+        assertTrue("يجب استعادة أسعار الصرف", restoredRates.any { it.id == "RATE_USD_TEST_99" })
+
+        val restoredParties = newDb.partyDao().getAllPartiesSync()
+        assertTrue("يجب استعادة العملاء", restoredParties.any { it.id == "PARTY_TEST_99" })
+
+        assertEquals("يجب استعادة هوية الشبكة", "شبكة سام العالمية للاختبار", newNetRepo.config.value.networkName)
+        assertEquals("يجب استعادة موديل راوتر ميكروتك", "MikroTik CCR2116", newNetRepo.config.value.mainRouterModel)
+        assertTrue("يجب استعادة أجهزة ميكروتك", newNetRepo.devices.value.any { it.id == "DEV_TEST_101" })
     }
 }

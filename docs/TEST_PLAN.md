@@ -38,6 +38,18 @@ The test suite ensures 100% compliance with double-entry mathematical invariants
 29. **Hare-Niemeyer Profit Distribution (C.2):** Largest Remainder Method distributes uneven profits with zero rounding residue down to 1 Rial (DR 3301, CR 3201).
 30. **Capital Contribution Voiding & Reversal (C.1/C.3):** Voiding multi-currency contribution posts compensatory reversal entry and satisfies all invariants.
 
+### Suite D: Period-End Revaluation & Dual-Currency Reporting (`ForeignRevaluationPartDTest`)
+31. **IAS 21 Monetary Items Scope (D.1):** Evaluates Foreign Treasury (1101/1102) and Foreign Receivables/Payables (1201/2101).
+32. **IAS 21 Non-Monetary Strict Invariant (D.1):** Non-monetary items (Fixed Assets 1501, Inventory 1401, Partner Capital 3101) MUST NEVER be revalued.
+33. **Unrealized FX Gain on Foreign Treasury (D.1):** Dr Treasury (1101), Cr Unrealized FX Gain (4902) upon currency appreciation.
+34. **Unrealized FX Loss on Foreign Treasury (D.1):** Dr Unrealized FX Loss (5902), Cr Treasury (1101) upon currency depreciation.
+35. **Unrealized FX Gain on Foreign Receivables (D.1):** Dr 1201 Receivables, Cr 4902 Unrealized FX Gain.
+36. **Unrealized FX Loss on Foreign Payables (D.1):** Dr 5902 Unrealized FX Loss, Cr 2101 Payables.
+37. **Periodic Revaluation Document Type (D.1):** Document type PERIODIC_REVALUATION (REV) generated and verified.
+38. **Revaluation Idempotency (D.1):** Zero delta generates no redundant document or entry.
+39. **Dual-Currency Trial Balance Reporting (D.2):** Base YER and original currencies displayed simultaneously with trial balance equilibrium.
+40. **Profit & Loss Statement FX Reporting (D.2):** Realized (4901/5901) and Unrealized (4902/5902) FX separated with correct net profit integration.
+
 ## 3. Execution Command
 ```bash
 gradle :app:testDebugUnitTest

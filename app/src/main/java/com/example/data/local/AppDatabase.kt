@@ -103,18 +103,13 @@ abstract class AppDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
-        @Volatile
-        var appContext: Context? = null
-
         fun getInstance(context: Context): AppDatabase {
-            appContext = context.applicationContext
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: buildDatabase(context).also { INSTANCE = it }
             }
         }
 
         private fun buildDatabase(context: Context): AppDatabase {
-            appContext = context.applicationContext
             return Room.databaseBuilder(
                 context.applicationContext,
                 AppDatabase::class.java,
@@ -127,7 +122,6 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         fun createInMemory(context: Context): AppDatabase {
-            appContext = context.applicationContext
             return Room.inMemoryDatabaseBuilder(
                 context.applicationContext,
                 AppDatabase::class.java
@@ -220,7 +214,7 @@ abstract class AppDatabase : RoomDatabase() {
                 AccountEntity(AccountConstants.SALES_RETURNS, "مردودات ومسموحات المبيعات", "REVENUE", isDebitNormal = true, isLocked = true),
                 AccountEntity(AccountConstants.DIRECT_SERVICE_REVENUE, "إيرادات الاشتراكات المباشرة والخدمات", "REVENUE", isDebitNormal = false, isLocked = true),
                 AccountEntity(AccountConstants.REALIZED_FX_GAIN, "أرباح فروق العملة المحققة", "REVENUE", isDebitNormal = false, isLocked = true),
-                AccountEntity(AccountConstants.UNREALIZED_FX_GAIN, "أرباح فروق العملة غير المحققة (إعادة التقييم)", "REVENUE", isDebitNormal = false, isLocked = true),
+                AccountEntity(AccountConstants.UNREALIZED_FX_GAIN, "أرباح فروق تقييم العملة غير المحققة", "REVENUE", isDebitNormal = false, isLocked = true),
                 AccountEntity(AccountConstants.DIRECT_ISP_SERVICE_COST, "تكلفة الخدمة المباشرة (اشتراكات الإنترنت)", "EXPENSE", isDebitNormal = true, isLocked = true),
                 AccountEntity(AccountConstants.OPERATING_EXPENSES, "مصاريف تشغيل وعمومية (ديزل/كهرباء)", "EXPENSE", isDebitNormal = true, isLocked = true),
                 AccountEntity(AccountConstants.MAINTENANCE_SPARES, "صيانة وقطع غيار", "EXPENSE", isDebitNormal = true, isLocked = true),
@@ -228,7 +222,7 @@ abstract class AppDatabase : RoomDatabase() {
                 AccountEntity(AccountConstants.SALARIES_STAFF, "رواتب وأجور وفنيون", "EXPENSE", isDebitNormal = true, isLocked = true),
                 AccountEntity(AccountConstants.MISC_EXPENSES, "مصاريف متنوعة", "EXPENSE", isDebitNormal = true, isLocked = true),
                 AccountEntity(AccountConstants.REALIZED_FX_LOSS, "خسائر فروق العملة المحققة", "EXPENSE", isDebitNormal = true, isLocked = true),
-                AccountEntity(AccountConstants.UNREALIZED_FX_LOSS, "خسائر فروق العملة غير المحققة (إعادة التقييم)", "EXPENSE", isDebitNormal = true, isLocked = true)
+                AccountEntity(AccountConstants.UNREALIZED_FX_LOSS, "خسائر فروق تقييم العملة غير المحققة", "EXPENSE", isDebitNormal = true, isLocked = true)
             )
 
             accounts.forEach { acc ->

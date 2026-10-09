@@ -73,6 +73,23 @@ data class BalanceSheetReport(
     val lineDetails: List<BalanceSheetRow>
 )
 
+data class DualCurrencyTrialBalanceRow(
+    val accountCode: String,
+    val accountName: String,
+    val isDebitNormal: Boolean,
+    val baseDebitMinor: Long,
+    val baseCreditMinor: Long,
+    val baseNetMinor: Long,
+    val originalBalances: Map<CurrencyCode, Long> // Currency -> Net original minor units
+)
+
+data class DualCurrencyTrialBalanceReport(
+    val rows: List<DualCurrencyTrialBalanceRow>,
+    val totalBaseDebitMinor: Long,
+    val totalBaseCreditMinor: Long,
+    val isBalanced: Boolean
+)
+
 data class AgingBucket(
     val bucketName: String,
     val amountMinor: Long,
@@ -311,6 +328,68 @@ class FinancialStatementsUseCase(private val db: AppDatabase) {
             aging31to60 = AgingBucket("31 - 60 يوم", b31to60Amt, b31to60Count),
             aging61to90 = AgingBucket("61 - 90 يوم", b61to90Amt, b61to90Count),
             agingOver90 = AgingBucket("أكثر من 90 يوماً", b90PlusAmt, b90PlusCount)
+        )
+    }
+
+    /**
+     * Generates a Dual-Currency Trial Balance:
+     * - Every GL account reports balances in Base currency (YER) alongside any underlying foreign currency original balances.
+     */
+    suspend fun generateDualCurrencyTrialBalance(): DualCurrencyTrialBalanceReport {
+        val accounts = db.accountDao().getAllAccountsSync()
+        val allLines = db.journalDao().getAllLinesSync()
+        val linesByAccount = allLines.groupBy { it.accountCode }
+
+        val rows = mutableListOf<DualCurrencyTrialBalanceRow>()
+        var totalBaseDebit = 0L
+        var totalBaseCredit = 0L
+
+        accounts.forEach { acc ->
+            val lines = linesByAccount[acc.code] ?: emptyList()
+            val baseDebit = lines.sumOf { it.baseDebitMinor }
+            val baseCredit = lines.sumOf { it.baseCreditMinor }
+            val baseNet = if (acc.isDebitNormal) baseDebit - baseCredit else baseCredit - baseDebit
+
+            totalBaseDebit += baseDebit
+            totalBaseCredit += baseCredit
+
+            // Compute net original balances per currency
+            val origByCurrency = mutableMapOf<CurrencyCode, Long>()
+            val linesByCurr = lines.groupBy { it.currency }
+            linesByCurr.forEach { (currStr, currLines) ->
+                val curr = CurrencyCode.fromString(currStr)
+                val netOrig = currLines.sumOf { line ->
+                    if (acc.isDebitNormal) {
+                        if (line.baseDebitMinor > 0) line.origMinor else -line.origMinor
+                    } else {
+                        if (line.baseCreditMinor > 0) line.origMinor else -line.origMinor
+                    }
+                }
+                if (netOrig != 0L) {
+                    origByCurrency[curr] = netOrig
+                }
+            }
+
+            if (baseDebit > 0L || baseCredit > 0L || origByCurrency.isNotEmpty()) {
+                rows.add(
+                    DualCurrencyTrialBalanceRow(
+                        accountCode = acc.code,
+                        accountName = acc.name,
+                        isDebitNormal = acc.isDebitNormal,
+                        baseDebitMinor = baseDebit,
+                        baseCreditMinor = baseCredit,
+                        baseNetMinor = baseNet,
+                        originalBalances = origByCurrency
+                    )
+                )
+            }
+        }
+
+        return DualCurrencyTrialBalanceReport(
+            rows = rows.sortedBy { it.accountCode },
+            totalBaseDebitMinor = totalBaseDebit,
+            totalBaseCreditMinor = totalBaseCredit,
+            isBalanced = (totalBaseDebit == totalBaseCredit)
         )
     }
 }

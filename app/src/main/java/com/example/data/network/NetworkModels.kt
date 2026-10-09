@@ -1,7 +1,6 @@
 package com.example.data.network
 
 import android.content.Context
-import com.example.core.model.RateZone
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,17 +25,8 @@ data class NetworkConfig(
     val adminPort: Int = 8728,
     val primaryDns: String = "8.8.8.8",
     val secondaryDns: String = "1.1.1.1",
-    val approvedSubnet: String = "10.10.0.0/16",
-    val rateZone: RateZone = RateZone.SANAA,
-    val defaultUsdRateMicros: Long = 535_000_000L,
-    val defaultSarRateMicros: Long = 140_500_000L,
-    val updatedAt: Long = System.currentTimeMillis()
-) {
-    val defaultUsdRate: Double get() = defaultUsdRateMicros.toDouble() / 1_000_000.0
-    val defaultSarRate: Double get() = defaultSarRateMicros.toDouble() / 1_000_000.0
-}
-
-typealias NetworkProfile = NetworkConfig
+    val approvedSubnet: String = "10.10.0.0/16"
+)
 
 enum class DeviceType(val labelArabic: String) {
     ACCESS_POINT("سيكتور بث AP"),
@@ -62,23 +52,8 @@ data class NetworkDevice(
     val frequency: String = "5500 MHz",
     val channelWidth: String = "20/40 MHz",
     val status: DeviceStatus = DeviceStatus.ONLINE,
-    val notes: String = "",
-    val model: String = "MikroTik RouterBOARD",
-    val managementPort: Int = 8728,
-    val subnet: String = "10.10.1.0/24",
-    val credentials: String = "admin"
-) {
-    val location: String get() = towerLocation
-
-    fun clone(customSuffix: String = " - نسخة"): NetworkDevice {
-        return this.copy(
-            id = UUID.randomUUID().toString(),
-            name = "$name$customSuffix",
-            ipAddress = "",
-            macAddress = ""
-        )
-    }
-}
+    val notes: String = ""
+)
 
 data class SubnetRange(
     val id: String = UUID.randomUUID().toString(),
@@ -90,19 +65,16 @@ data class SubnetRange(
     val purpose: String
 )
 
-typealias DeviceEntity = NetworkDevice
-
 sealed interface DeviceSaveResult {
     data class Success(val device: NetworkDevice) : DeviceSaveResult
     data class IpConflict(val conflictingDevice: NetworkDevice) : DeviceSaveResult
 }
 
-class NetworkRepository(private val context: Context) : com.example.data.local.dao.DeviceDao {
+class NetworkRepository(private val context: Context) {
 
     private val configFile = File(context.filesDir, "network_config.json")
     private val devicesFile = File(context.filesDir, "network_devices.json")
     private val subnetsFile = File(context.filesDir, "network_subnets.json")
-    private val networkPrefs = context.getSharedPreferences("sammikrotik_network_prefs", Context.MODE_PRIVATE)
 
     private val _config = MutableStateFlow(loadConfig())
     val config: StateFlow<NetworkConfig> = _config.asStateFlow()
@@ -117,11 +89,6 @@ class NetworkRepository(private val context: Context) : com.example.data.local.d
         return try {
             if (configFile.exists()) {
                 val json = JSONObject(configFile.readText())
-                val zoneStr = json.optString("rateZone", RateZone.SANAA.name)
-                val zone = runCatching { RateZone.valueOf(zoneStr) }.getOrDefault(RateZone.SANAA)
-                val usdMicros = json.optLong("defaultUsdRateMicros", 535_000_000L)
-                val sarMicros = json.optLong("defaultSarRateMicros", 140_500_000L)
-                val updatedAt = json.optLong("updatedAt", System.currentTimeMillis())
                 NetworkConfig(
                     networkName = json.optString("networkName", "شبكة توزيع الإنترنت"),
                     ownerName = json.optString("ownerName", "مدير الشبكة"),
@@ -136,35 +103,7 @@ class NetworkRepository(private val context: Context) : com.example.data.local.d
                     adminPort = json.optInt("adminPort", 8728),
                     primaryDns = json.optString("primaryDns", "8.8.8.8"),
                     secondaryDns = json.optString("secondaryDns", "1.1.1.1"),
-                    approvedSubnet = json.optString("approvedSubnet", "10.10.0.0/16"),
-                    rateZone = zone,
-                    defaultUsdRateMicros = usdMicros,
-                    defaultSarRateMicros = sarMicros,
-                    updatedAt = updatedAt
-                )
-            } else if (networkPrefs.contains("network_name") || networkPrefs.contains("networkName")) {
-                val name = networkPrefs.getString("network_name", null) ?: networkPrefs.getString("networkName", "شبكة توزيع الإنترنت") ?: "شبكة توزيع الإنترنت"
-                val zoneStr = networkPrefs.getString("rate_zone", null) ?: networkPrefs.getString("rateZone", RateZone.SANAA.name) ?: RateZone.SANAA.name
-                val zone = runCatching { RateZone.valueOf(zoneStr) }.getOrDefault(RateZone.SANAA)
-                NetworkConfig(
-                    networkName = name,
-                    ownerName = networkPrefs.getString("owner_name", null) ?: networkPrefs.getString("ownerName", "مدير الشبكة") ?: "مدير الشبكة",
-                    location = networkPrefs.getString("location", "المركز الرئيسي") ?: "المركز الرئيسي",
-                    welcomeMessage = networkPrefs.getString("welcome_message", null) ?: networkPrefs.getString("welcomeMessage", "أهلاً بكم في شبكتنا - إنترنت فائق السرعة") ?: "أهلاً بكم في شبكتنا - إنترنت فائق السرعة",
-                    supportPhone = networkPrefs.getString("support_phone", null) ?: networkPrefs.getString("supportPhone", "770000000") ?: "770000000",
-                    supportWhatsapp = networkPrefs.getString("support_whatsapp", null) ?: networkPrefs.getString("supportWhatsapp", "967770000000") ?: "967770000000",
-                    mainRouterModel = networkPrefs.getString("main_router_model", null) ?: networkPrefs.getString("mainRouterModel", "MikroTik CCR2004-16G-2S+") ?: "MikroTik CCR2004-16G-2S+",
-                    routerOsVersion = networkPrefs.getString("router_os_version", null) ?: networkPrefs.getString("routerOsVersion", "v7.16") ?: "v7.16",
-                    hotspotDomain = networkPrefs.getString("hotspot_domain", null) ?: networkPrefs.getString("hotspotDomain", "login.net") ?: "login.net",
-                    hotspotServerName = networkPrefs.getString("hotspot_server_name", null) ?: networkPrefs.getString("hotspotServerName", "hotspot1") ?: "hotspot1",
-                    adminPort = networkPrefs.getInt("admin_port", networkPrefs.getInt("adminPort", 8728)),
-                    primaryDns = networkPrefs.getString("primary_dns", null) ?: networkPrefs.getString("primaryDns", "8.8.8.8") ?: "8.8.8.8",
-                    secondaryDns = networkPrefs.getString("secondary_dns", null) ?: networkPrefs.getString("secondaryDns", "1.1.1.1") ?: "1.1.1.1",
-                    approvedSubnet = networkPrefs.getString("approved_subnet", null) ?: networkPrefs.getString("approvedSubnet", "10.10.0.0/16") ?: "10.10.0.0/16",
-                    rateZone = zone,
-                    defaultUsdRateMicros = networkPrefs.getLong("default_usd_rate_micros", networkPrefs.getLong("defaultUsdRateMicros", 535_000_000L)),
-                    defaultSarRateMicros = networkPrefs.getLong("default_sar_rate_micros", networkPrefs.getLong("defaultSarRateMicros", 140_500_000L)),
-                    updatedAt = networkPrefs.getLong("updated_at", networkPrefs.getLong("updatedAt", System.currentTimeMillis()))
+                    approvedSubnet = json.optString("approvedSubnet", "10.10.0.0/16")
                 )
             } else {
                 NetworkConfig()
@@ -190,57 +129,9 @@ class NetworkRepository(private val context: Context) : com.example.data.local.d
             put("primaryDns", newConfig.primaryDns)
             put("secondaryDns", newConfig.secondaryDns)
             put("approvedSubnet", newConfig.approvedSubnet)
-            put("rateZone", newConfig.rateZone.name)
-            put("defaultUsdRateMicros", newConfig.defaultUsdRateMicros)
-            put("defaultSarRateMicros", newConfig.defaultSarRateMicros)
-            put("updatedAt", newConfig.updatedAt)
         }
         configFile.writeText(json.toString(2))
-
-        networkPrefs.edit()
-            .putString("network_name", newConfig.networkName)
-            .putString("networkName", newConfig.networkName)
-            .putString("owner_name", newConfig.ownerName)
-            .putString("ownerName", newConfig.ownerName)
-            .putString("location", newConfig.location)
-            .putString("welcome_message", newConfig.welcomeMessage)
-            .putString("welcomeMessage", newConfig.welcomeMessage)
-            .putString("support_phone", newConfig.supportPhone)
-            .putString("supportPhone", newConfig.supportPhone)
-            .putString("support_whatsapp", newConfig.supportWhatsapp)
-            .putString("supportWhatsapp", newConfig.supportWhatsapp)
-            .putString("main_router_model", newConfig.mainRouterModel)
-            .putString("mainRouterModel", newConfig.mainRouterModel)
-            .putString("router_os_version", newConfig.routerOsVersion)
-            .putString("routerOsVersion", newConfig.routerOsVersion)
-            .putString("hotspot_domain", newConfig.hotspotDomain)
-            .putString("hotspotDomain", newConfig.hotspotDomain)
-            .putString("hotspot_server_name", newConfig.hotspotServerName)
-            .putString("hotspotServerName", newConfig.hotspotServerName)
-            .putInt("admin_port", newConfig.adminPort)
-            .putInt("adminPort", newConfig.adminPort)
-            .putString("primary_dns", newConfig.primaryDns)
-            .putString("primaryDns", newConfig.primaryDns)
-            .putString("secondary_dns", newConfig.secondaryDns)
-            .putString("secondaryDns", newConfig.secondaryDns)
-            .putString("approved_subnet", newConfig.approvedSubnet)
-            .putString("approvedSubnet", newConfig.approvedSubnet)
-            .putString("rate_zone", newConfig.rateZone.name)
-            .putString("rateZone", newConfig.rateZone.name)
-            .putLong("default_usd_rate_micros", newConfig.defaultUsdRateMicros)
-            .putLong("defaultUsdRateMicros", newConfig.defaultUsdRateMicros)
-            .putLong("default_sar_rate_micros", newConfig.defaultSarRateMicros)
-            .putLong("defaultSarRateMicros", newConfig.defaultSarRateMicros)
-            .putLong("updated_at", newConfig.updatedAt)
-            .putLong("updatedAt", newConfig.updatedAt)
-            .apply()
-
         _config.value = newConfig
-    }
-
-    suspend fun restoreNetworkProfile(profile: com.example.util.NetworkProfileBackupDto) = withContext(Dispatchers.IO) {
-        val newConfig = profile.toNetworkConfig()
-        saveConfig(newConfig)
     }
 
     private fun loadDevices(): List<NetworkDevice> {
@@ -261,11 +152,7 @@ class NetworkRepository(private val context: Context) : com.example.data.local.d
                             frequency = obj.optString("frequency", "5500 MHz"),
                             channelWidth = obj.optString("channelWidth", "20/40 MHz"),
                             status = runCatching { DeviceStatus.valueOf(obj.getString("status")) }.getOrDefault(DeviceStatus.ONLINE),
-                            notes = obj.optString("notes", ""),
-                            model = obj.optString("model", "MikroTik RouterBOARD"),
-                            managementPort = obj.optInt("managementPort", 8728),
-                            subnet = obj.optString("subnet", "10.10.1.0/24"),
-                            credentials = obj.optString("credentials", "admin")
+                            notes = obj.optString("notes", "")
                         )
                     )
                 }
@@ -325,30 +212,6 @@ class NetworkRepository(private val context: Context) : com.example.data.local.d
         return initial
     }
 
-    override suspend fun findDeviceByIp(ip: String, currentDeviceId: Long): NetworkDevice? {
-        val cleanIp = ip.trim()
-        if (cleanIp.isBlank()) return null
-        return _devices.value.firstOrNull {
-            it.id.hashCode().toLong() != currentDeviceId && it.ipAddress.trim().equals(cleanIp, ignoreCase = true)
-        }
-    }
-
-    override suspend fun findDeviceByIp(ip: String, currentDeviceId: String): NetworkDevice? {
-        return findDeviceByIp(ip, excludeDeviceId = currentDeviceId)
-    }
-
-    override suspend fun getAllDevices(): List<NetworkDevice> {
-        return _devices.value
-    }
-
-    override suspend fun insertDevice(device: NetworkDevice) {
-        addOrUpdateDevice(device)
-    }
-
-    override suspend fun updateDevice(device: NetworkDevice) {
-        addOrUpdateDevice(device)
-    }
-
     fun findDeviceByIp(ip: String, excludeDeviceId: String? = null): NetworkDevice? {
         val cleanIp = ip.trim()
         if (cleanIp.isBlank()) return null
@@ -375,33 +238,10 @@ class NetworkRepository(private val context: Context) : com.example.data.local.d
         DeviceSaveResult.Success(device)
     }
 
-    override suspend fun deleteDevice(deviceId: String) = withContext(Dispatchers.IO) {
+    suspend fun deleteDevice(deviceId: String) = withContext(Dispatchers.IO) {
         val current = _devices.value.filter { it.id != deviceId }
         saveDevicesInternal(current)
         _devices.value = current
-    }
-
-    override suspend fun insertAll(devices: List<NetworkDevice>) = withContext(Dispatchers.IO) {
-        if (_devices.value.isEmpty()) {
-            saveDevicesInternal(devices)
-            _devices.value = devices
-        } else {
-            val currentMap = _devices.value.associateBy { it.id }.toMutableMap()
-            devices.forEach { currentMap[it.id] = it }
-            val list = currentMap.values.toList()
-            saveDevicesInternal(list)
-            _devices.value = list
-        }
-    }
-
-    override suspend fun deleteAllDevices() = withContext(Dispatchers.IO) {
-        saveDevicesInternal(emptyList())
-        _devices.value = emptyList()
-    }
-
-    suspend fun overwriteAllDevices(devices: List<NetworkDevice>) = withContext(Dispatchers.IO) {
-        saveDevicesInternal(devices)
-        _devices.value = devices
     }
 
     suspend fun importDevicesFromJson(jsonString: String, replaceExisting: Boolean = false): Int = withContext(Dispatchers.IO) {
@@ -442,10 +282,6 @@ class NetworkRepository(private val context: Context) : com.example.data.local.d
                 put("channelWidth", d.channelWidth)
                 put("status", d.status.name)
                 put("notes", d.notes)
-                put("model", d.model)
-                put("managementPort", d.managementPort)
-                put("subnet", d.subnet)
-                put("credentials", d.credentials)
             }
             array.put(obj)
         }
@@ -546,55 +382,132 @@ class NetworkRepository(private val context: Context) : com.example.data.local.d
         subnetsFile.writeText(array.toString(2))
     }
 
-    suspend fun restoreSubnets(subnetsList: List<SubnetRange>) = withContext(Dispatchers.IO) {
-        saveSubnetsInternal(subnetsList)
-        _subnets.value = subnetsList
+    fun exportAllNetworkDataToJson(): JSONObject {
+        val root = JSONObject()
+
+        // 1. Network Identity & Config
+        val conf = _config.value
+        val confObj = JSONObject().apply {
+            put("networkName", conf.networkName)
+            put("ownerName", conf.ownerName)
+            put("location", conf.location)
+            put("welcomeMessage", conf.welcomeMessage)
+            put("supportPhone", conf.supportPhone)
+            put("supportWhatsapp", conf.supportWhatsapp)
+            put("mainRouterModel", conf.mainRouterModel)
+            put("routerOsVersion", conf.routerOsVersion)
+            put("hotspotDomain", conf.hotspotDomain)
+            put("hotspotServerName", conf.hotspotServerName)
+            put("adminPort", conf.adminPort)
+            put("primaryDns", conf.primaryDns)
+            put("secondaryDns", conf.secondaryDns)
+            put("approvedSubnet", conf.approvedSubnet)
+        }
+        root.put("config", confObj)
+
+        // 2. Network Devices (AP, Router, Station, Switch, Antenna)
+        val devArr = JSONArray()
+        for (d in _devices.value) {
+            val devObj = JSONObject().apply {
+                put("id", d.id)
+                put("name", d.name)
+                put("ipAddress", d.ipAddress)
+                put("deviceType", d.deviceType.name)
+                put("macAddress", d.macAddress)
+                put("towerLocation", d.towerLocation)
+                put("frequency", d.frequency)
+                put("channelWidth", d.channelWidth)
+                put("status", d.status.name)
+                put("notes", d.notes)
+            }
+            devArr.put(devObj)
+        }
+        root.put("devices", devArr)
+
+        // 3. Subnets & IP ranges
+        val subArr = JSONArray()
+        for (s in _subnets.value) {
+            val subObj = JSONObject().apply {
+                put("id", s.id)
+                put("name", s.name)
+                put("cidr", s.cidr)
+                put("gateway", s.gateway)
+                put("dhcpRangeStart", s.dhcpRangeStart)
+                put("dhcpRangeEnd", s.dhcpRangeEnd)
+                put("purpose", s.purpose)
+            }
+            subArr.put(subObj)
+        }
+        root.put("subnets", subArr)
+
+        return root
     }
-}
 
-fun com.example.util.NetworkProfileBackupDto.toNetworkConfig(): NetworkConfig {
-    val zone = runCatching { RateZone.valueOf(rateZone) }.getOrDefault(RateZone.SANAA)
-    return NetworkConfig(
-        networkName = networkName,
-        ownerName = ownerName,
-        location = location,
-        welcomeMessage = welcomeMessage,
-        supportPhone = supportPhone,
-        supportWhatsapp = supportWhatsapp,
-        mainRouterModel = mainRouterModel,
-        routerOsVersion = routerOsVersion,
-        hotspotDomain = hotspotDomain,
-        hotspotServerName = hotspotServerName,
-        adminPort = adminPort,
-        primaryDns = primaryDns,
-        secondaryDns = secondaryDns,
-        approvedSubnet = approvedSubnet,
-        rateZone = zone,
-        defaultUsdRateMicros = defaultUsdRateMicros,
-        defaultSarRateMicros = defaultSarRateMicros,
-        updatedAt = updatedAt
-    )
-}
+    suspend fun restoreAllNetworkDataFromJson(root: JSONObject) = withContext(Dispatchers.IO) {
+        if (root.has("config")) {
+            val c = root.getJSONObject("config")
+            val restoredConfig = NetworkConfig(
+                networkName = c.optString("networkName", "شبكة توزيع الإنترنت"),
+                ownerName = c.optString("ownerName", "مدير الشبكة"),
+                location = c.optString("location", "المركز الرئيسي"),
+                welcomeMessage = c.optString("welcomeMessage", "أهلاً بكم في شبكتنا - إنترنت فائق السرعة"),
+                supportPhone = c.optString("supportPhone", "770000000"),
+                supportWhatsapp = c.optString("supportWhatsapp", "967770000000"),
+                mainRouterModel = c.optString("mainRouterModel", "MikroTik CCR2004-16G-2S+"),
+                routerOsVersion = c.optString("routerOsVersion", "v7.16"),
+                hotspotDomain = c.optString("hotspotDomain", "login.net"),
+                hotspotServerName = c.optString("hotspotServerName", "hotspot1"),
+                adminPort = c.optInt("adminPort", 8728),
+                primaryDns = c.optString("primaryDns", "8.8.8.8"),
+                secondaryDns = c.optString("secondaryDns", "1.1.1.1"),
+                approvedSubnet = c.optString("approvedSubnet", "10.10.0.0/16")
+            )
+            saveConfig(restoredConfig)
+        }
 
-fun NetworkConfig.toBackupDto(): com.example.util.NetworkProfileBackupDto {
-    return com.example.util.NetworkProfileBackupDto(
-        networkName = networkName,
-        ownerName = ownerName,
-        location = location,
-        welcomeMessage = welcomeMessage,
-        supportPhone = supportPhone,
-        supportWhatsapp = supportWhatsapp,
-        mainRouterModel = mainRouterModel,
-        routerOsVersion = routerOsVersion,
-        hotspotDomain = hotspotDomain,
-        hotspotServerName = hotspotServerName,
-        adminPort = adminPort,
-        primaryDns = primaryDns,
-        secondaryDns = secondaryDns,
-        approvedSubnet = approvedSubnet,
-        rateZone = rateZone.name,
-        defaultUsdRateMicros = defaultUsdRateMicros,
-        defaultSarRateMicros = defaultSarRateMicros,
-        updatedAt = updatedAt
-    )
+        if (root.has("devices")) {
+            val devArr = root.getJSONArray("devices")
+            val restoredDevices = mutableListOf<NetworkDevice>()
+            for (i in 0 until devArr.length()) {
+                val d = devArr.getJSONObject(i)
+                restoredDevices.add(
+                    NetworkDevice(
+                        id = d.optString("id", UUID.randomUUID().toString()),
+                        name = d.getString("name"),
+                        ipAddress = d.getString("ipAddress"),
+                        deviceType = runCatching { DeviceType.valueOf(d.getString("deviceType")) }.getOrDefault(DeviceType.ACCESS_POINT),
+                        macAddress = d.optString("macAddress", ""),
+                        towerLocation = d.optString("towerLocation", "البرج الرئيسي"),
+                        frequency = d.optString("frequency", "5500 MHz"),
+                        channelWidth = d.optString("channelWidth", "20/40 MHz"),
+                        status = runCatching { DeviceStatus.valueOf(d.getString("status")) }.getOrDefault(DeviceStatus.ONLINE),
+                        notes = d.optString("notes", "")
+                    )
+                )
+            }
+            saveDevicesInternal(restoredDevices)
+            _devices.value = restoredDevices
+        }
+
+        if (root.has("subnets")) {
+            val subArr = root.getJSONArray("subnets")
+            val restoredSubnets = mutableListOf<SubnetRange>()
+            for (i in 0 until subArr.length()) {
+                val s = subArr.getJSONObject(i)
+                restoredSubnets.add(
+                    SubnetRange(
+                        id = s.optString("id", UUID.randomUUID().toString()),
+                        name = s.getString("name"),
+                        cidr = s.getString("cidr"),
+                        gateway = s.getString("gateway"),
+                        dhcpRangeStart = s.getString("dhcpRangeStart"),
+                        dhcpRangeEnd = s.getString("dhcpRangeEnd"),
+                        purpose = s.getString("purpose")
+                    )
+                )
+            }
+            saveSubnetsInternal(restoredSubnets)
+            _subnets.value = restoredSubnets
+        }
+    }
 }

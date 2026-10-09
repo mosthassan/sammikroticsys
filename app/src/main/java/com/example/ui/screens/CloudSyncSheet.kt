@@ -528,6 +528,18 @@ fun CloudSyncSheet(
                         SyncMetricItem(title = "الأطراف والوكلاء", count = syncMeta?.totalParties ?: 0)
                         SyncMetricItem(title = "باقات الكروت", count = syncMeta?.totalPackages ?: 0)
                     }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        SyncMetricItem(title = "أجهزة الشبكة", count = syncMeta?.totalNetworkDevices ?: 0)
+                        SyncMetricItem(title = "أسعار الصرف", count = syncMeta?.totalCurrencyRates ?: 0)
+                        SyncMetricItem(title = "الخزائن والصناديق", count = syncMeta?.totalTreasuries ?: 0)
+                        SyncMetricItem(title = "التسويات والربط", count = syncMeta?.totalAllocations ?: 0)
+                    }
                 }
             }
 

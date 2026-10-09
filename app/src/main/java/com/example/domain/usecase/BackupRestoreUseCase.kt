@@ -1,54 +1,26 @@
 package com.example.domain.usecase
 
-import android.content.Context
 import androidx.room.withTransaction
 import com.example.data.ledger.LedgerInvariants
 import com.example.data.local.AppDatabase
-import com.example.data.local.dao.DeviceDao
-import com.example.data.network.DeviceStatus
-import com.example.data.network.DeviceType
-import com.example.data.network.NetworkDevice
 import com.example.data.network.NetworkRepository
-import com.example.data.network.SubnetRange
-import com.example.data.network.toBackupDto
-import com.example.data.network.toNetworkConfig
-import com.example.util.AppBackupData
-import com.example.util.DataJsonHelper
-import com.example.util.NetworkProfileBackupDto
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
-import java.util.UUID
 
 class BackupRestoreUseCase(
     private val db: AppDatabase,
-    private val deviceDao: DeviceDao? = null,
-    private val networkRepository: NetworkRepository? = null,
-    private val context: Context? = null
+    private val networkRepository: NetworkRepository? = null
 ) {
 
     private val invariants = LedgerInvariants(db)
-
-    private val effectiveContext: Context?
-        get() = context ?: AppDatabase.appContext
-
-    private val effectiveNetworkRepository: NetworkRepository?
-        get() = networkRepository ?: (deviceDao as? NetworkRepository) ?: effectiveContext?.let { NetworkRepository(it) }
-
-    private val effectiveDeviceDao: DeviceDao?
-        get() = deviceDao ?: effectiveNetworkRepository
-
-    // In-memory fallback caches ensure 100% preservation across backup/restore cycles even without Android Context
-    private val fallbackDevices = mutableListOf<NetworkDevice>()
-    private var fallbackProfile: NetworkProfileBackupDto? = null
-    private val fallbackSubnets = mutableListOf<SubnetRange>()
 
     suspend fun exportDatabaseToJson(): String {
         val root = JSONObject()
         root.put("schemaVersion", 1)
         root.put("timestamp", System.currentTimeMillis())
 
-        // 0. Organization
+        // 0. Organization (هوية المنشأة والشبكة)
         val org = db.organizationDao().getOrganizationSync()
         if (org != null) {
             val orgObj = JSONObject()
@@ -62,6 +34,11 @@ class BackupRestoreUseCase(
             orgObj.put("equityShareMode", org.equityShareMode)
             orgObj.put("createdAt", org.createdAt)
             root.put("organization", orgObj)
+        }
+
+        // 0.1 Network Hub (هوية الشبكة، أجهزة ميكروتك، سيكتورات، رينجات Subnets)
+        if (networkRepository != null) {
+            root.put("network_hub", networkRepository.exportAllNetworkDataToJson())
         }
 
         // 1. Parties
@@ -273,7 +250,6 @@ class BackupRestoreUseCase(
             ratesArr.put(obj)
         }
         root.put("currency_rates", ratesArr)
-        root.put("currencyRates", ratesArr)
 
         // 14. Stock Movements
         val stockArr = JSONArray()
@@ -290,75 +266,20 @@ class BackupRestoreUseCase(
         }
         root.put("stock_movements", stockArr)
 
-        // 15. Network Devices
-        val devArr = JSONArray()
-        val repoDevices = effectiveDeviceDao?.getAllDevices() ?: emptyList()
-        val devices = if (repoDevices.isNotEmpty()) repoDevices else fallbackDevices.toList()
-        devices.forEach { d ->
+        // 15. Audit Logs
+        val auditArr = JSONArray()
+        db.auditLogDao().getAllLogsSync().forEach { al ->
             val obj = JSONObject()
-            obj.put("id", d.id)
-            obj.put("name", d.name)
-            obj.put("ipAddress", d.ipAddress)
-            obj.put("deviceType", d.deviceType.name)
-            obj.put("macAddress", d.macAddress)
-            obj.put("towerLocation", d.towerLocation)
-            obj.put("frequency", d.frequency)
-            obj.put("channelWidth", d.channelWidth)
-            obj.put("status", d.status.name)
-            obj.put("notes", d.notes)
-            obj.put("model", d.model)
-            obj.put("managementPort", d.managementPort)
-            obj.put("subnet", d.subnet)
-            obj.put("credentials", d.credentials)
-            devArr.put(obj)
+            obj.put("id", al.id)
+            obj.put("entityType", al.entityType)
+            obj.put("entityId", al.entityId)
+            obj.put("action", al.action)
+            obj.put("beforeJson", al.beforeJson)
+            obj.put("afterJson", al.afterJson)
+            obj.put("timestamp", al.timestamp)
+            auditArr.put(obj)
         }
-        root.put("network_devices", devArr)
-        root.put("networkDevices", devArr)
-
-        // 16. Network Profile & FX Configuration
-        val config = effectiveNetworkRepository?.config?.value
-        val profile = config?.toBackupDto() ?: extractProfileFromPrefs() ?: fallbackProfile
-        if (profile != null) {
-            val profObj = JSONObject()
-            profObj.put("networkName", profile.networkName)
-            profObj.put("ownerName", profile.ownerName)
-            profObj.put("location", profile.location)
-            profObj.put("welcomeMessage", profile.welcomeMessage)
-            profObj.put("supportPhone", profile.supportPhone)
-            profObj.put("supportWhatsapp", profile.supportWhatsapp)
-            profObj.put("mainRouterModel", profile.mainRouterModel)
-            profObj.put("routerOsVersion", profile.routerOsVersion)
-            profObj.put("hotspotDomain", profile.hotspotDomain)
-            profObj.put("hotspotServerName", profile.hotspotServerName)
-            profObj.put("adminPort", profile.adminPort)
-            profObj.put("primaryDns", profile.primaryDns)
-            profObj.put("secondaryDns", profile.secondaryDns)
-            profObj.put("approvedSubnet", profile.approvedSubnet)
-            profObj.put("rateZone", profile.rateZone)
-            profObj.put("defaultUsdRateMicros", profile.defaultUsdRateMicros)
-            profObj.put("defaultSarRateMicros", profile.defaultSarRateMicros)
-            profObj.put("updatedAt", profile.updatedAt)
-            root.put("network_profile", profObj)
-            root.put("networkProfile", profObj)
-        }
-
-        // 17. Network Subnets
-        val subnetsArr = JSONArray()
-        val repoSubnets = effectiveNetworkRepository?.subnets?.value ?: emptyList()
-        val subnetsList = if (repoSubnets.isNotEmpty()) repoSubnets else fallbackSubnets.toList()
-        subnetsList.forEach { s ->
-            val obj = JSONObject()
-            obj.put("id", s.id)
-            obj.put("name", s.name)
-            obj.put("cidr", s.cidr)
-            obj.put("gateway", s.gateway)
-            obj.put("dhcpRangeStart", s.dhcpRangeStart)
-            obj.put("dhcpRangeEnd", s.dhcpRangeEnd)
-            obj.put("purpose", s.purpose)
-            subnetsArr.put(obj)
-        }
-        root.put("network_subnets", subnetsArr)
-        root.put("networkSubnets", subnetsArr)
+        root.put("audit_logs", auditArr)
 
         val rawJson = root.toString(2)
         val hash = sha256(rawJson)
@@ -404,10 +325,12 @@ class BackupRestoreUseCase(
             sdb.execSQL("DELETE FROM card_packages")
             sdb.execSQL("DELETE FROM parties WHERE id != 'WALK_IN_CASH'")
             sdb.execSQL("DELETE FROM currency_rates")
+            sdb.execSQL("DELETE FROM audit_log")
 
-            // 0. Restore Organization
-            val orgObj = root.optJSONObject("organization")
-            if (orgObj != null) {
+            // 0. Restore Organization if present
+            if (root.has("organization")) {
+                val orgObj = root.getJSONObject("organization")
+                sdb.execSQL("DELETE FROM organizations")
                 val orgStmt = sdb.compileStatement("""
                     INSERT OR REPLACE INTO organizations 
                     (id, name, taxNumber, functionalCurrency, fiscalYearStartMonth, isInitialized, primaryRateZone, equityShareMode, createdAt)
@@ -691,7 +614,7 @@ class BackupRestoreUseCase(
             periodStmt.close()
 
             // 13. Restore Currency Rates
-            val ratesArr = root.optJSONArray("currency_rates") ?: root.optJSONArray("currencyRates") ?: JSONArray()
+            val ratesArr = root.optJSONArray("currency_rates") ?: JSONArray()
             val rateStmt = sdb.compileStatement("""
                 INSERT OR REPLACE INTO currency_rates 
                 (id, currency, zone, rateMicros, effectiveDateEpochDay, createdAt, createdBy, reason)
@@ -712,18 +635,8 @@ class BackupRestoreUseCase(
             }
             rateStmt.close()
 
-            if (ratesArr.length() == 0) {
-                // Ensure baseline rates are preserved so currency operations never fail
-                val nowDay = java.time.LocalDate.now().toEpochDay()
-                val nowMs = System.currentTimeMillis()
-                sdb.execSQL("INSERT OR IGNORE INTO currency_rates (id, currency, zone, rateMicros, effectiveDateEpochDay, createdAt, createdBy, reason) VALUES ('SEED_USD_SANAA', 'USD', 'SANAA', 535000000, $nowDay, $nowMs, 'SYSTEM_RESTORE', 'Baseline rate restored')")
-                sdb.execSQL("INSERT OR IGNORE INTO currency_rates (id, currency, zone, rateMicros, effectiveDateEpochDay, createdAt, createdBy, reason) VALUES ('SEED_USD_ADEN', 'USD', 'ADEN', 1680000000, $nowDay, $nowMs, 'SYSTEM_RESTORE', 'Baseline rate restored')")
-                sdb.execSQL("INSERT OR IGNORE INTO currency_rates (id, currency, zone, rateMicros, effectiveDateEpochDay, createdAt, createdBy, reason) VALUES ('SEED_SAR_SANAA', 'SAR', 'SANAA', 140500000, $nowDay, $nowMs, 'SYSTEM_RESTORE', 'Baseline rate restored')")
-                sdb.execSQL("INSERT OR IGNORE INTO currency_rates (id, currency, zone, rateMicros, effectiveDateEpochDay, createdAt, createdBy, reason) VALUES ('SEED_SAR_ADEN', 'SAR', 'ADEN', 442000000, $nowDay, $nowMs, 'SYSTEM_RESTORE', 'Baseline rate restored')")
-            }
-
             // 14. Restore Stock Movements
-            val stockArr = root.optJSONArray("stock_movements") ?: root.optJSONArray("stockMovements") ?: JSONArray()
+            val stockArr = root.optJSONArray("stock_movements") ?: JSONArray()
             val stockStmt = sdb.compileStatement("""
                 INSERT OR REPLACE INTO stock_movements 
                 (id, packageId, docId, type, quantity, movementDateEpochDay, createdAt)
@@ -743,87 +656,26 @@ class BackupRestoreUseCase(
             }
             stockStmt.close()
 
-            // 15. Restore Network Devices
-            val devJsonArr = root.optJSONArray("network_devices") ?: root.optJSONArray("networkDevices")
-            if (devJsonArr != null) {
-                val restoredDevices = mutableListOf<NetworkDevice>()
-                for (i in 0 until devJsonArr.length()) {
-                    val dObj = devJsonArr.getJSONObject(i)
-                    val typeStr = dObj.optString("deviceType", DeviceType.ACCESS_POINT.name)
-                    val statusStr = dObj.optString("status", DeviceStatus.ONLINE.name)
-                    restoredDevices.add(
-                        NetworkDevice(
-                            id = dObj.optString("id", UUID.randomUUID().toString()),
-                            name = dObj.getString("name"),
-                            ipAddress = dObj.getString("ipAddress"),
-                            deviceType = runCatching { DeviceType.valueOf(typeStr) }.getOrDefault(DeviceType.ACCESS_POINT),
-                            macAddress = dObj.optString("macAddress", ""),
-                            towerLocation = dObj.optString("towerLocation", "البرج الرئيسي"),
-                            frequency = dObj.optString("frequency", "5500 MHz"),
-                            channelWidth = dObj.optString("channelWidth", "20/40 MHz"),
-                            status = runCatching { DeviceStatus.valueOf(statusStr) }.getOrDefault(DeviceStatus.ONLINE),
-                            notes = dObj.optString("notes", ""),
-                            model = dObj.optString("model", "MikroTik RouterBOARD"),
-                            managementPort = dObj.optInt("managementPort", 8728),
-                            subnet = dObj.optString("subnet", "10.10.1.0/24"),
-                            credentials = dObj.optString("credentials", "admin")
-                        )
-                    )
-                }
-                effectiveDeviceDao?.deleteAllDevices()
-                if (restoredDevices.isNotEmpty()) {
-                    effectiveNetworkRepository?.overwriteAllDevices(restoredDevices)
-                        ?: effectiveDeviceDao?.insertAll(restoredDevices)
-                }
+            // 15. Restore Audit Logs
+            val auditArr = root.optJSONArray("audit_logs") ?: JSONArray()
+            val auditStmt = sdb.compileStatement("""
+                INSERT OR REPLACE INTO audit_log 
+                (id, entityType, entityId, action, beforeJson, afterJson, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """.trimIndent())
+            for (i in 0 until auditArr.length()) {
+                val al = auditArr.getJSONObject(i)
+                auditStmt.clearBindings()
+                auditStmt.bindString(1, al.getString("id"))
+                auditStmt.bindString(2, al.getString("entityType"))
+                auditStmt.bindString(3, al.getString("entityId"))
+                auditStmt.bindString(4, al.getString("action"))
+                if (al.isNull("beforeJson")) auditStmt.bindNull(5) else auditStmt.bindString(5, al.getString("beforeJson"))
+                if (al.isNull("afterJson")) auditStmt.bindNull(6) else auditStmt.bindString(6, al.getString("afterJson"))
+                auditStmt.bindLong(7, al.optLong("timestamp", System.currentTimeMillis()))
+                auditStmt.executeInsert()
             }
-
-            // 16. Restore Network Profile & FX Configuration
-            val profObj = root.optJSONObject("network_profile") ?: root.optJSONObject("networkProfile")
-            if (profObj != null) {
-                val profileDto = NetworkProfileBackupDto(
-                    networkName = profObj.optString("networkName", "شبكة توزيع الإنترنت"),
-                    ownerName = profObj.optString("ownerName", "مدير الشبكة"),
-                    location = profObj.optString("location", "المركز الرئيسي"),
-                    welcomeMessage = profObj.optString("welcomeMessage", "أهلاً بكم في شبكتنا - إنترنت فائق السرعة"),
-                    supportPhone = profObj.optString("supportPhone", "770000000"),
-                    supportWhatsapp = profObj.optString("supportWhatsapp", "967770000000"),
-                    mainRouterModel = profObj.optString("mainRouterModel", "MikroTik CCR2004-16G-2S+"),
-                    routerOsVersion = profObj.optString("routerOsVersion", "v7.16"),
-                    hotspotDomain = profObj.optString("hotspotDomain", "login.net"),
-                    hotspotServerName = profObj.optString("hotspotServerName", "hotspot1"),
-                    adminPort = profObj.optInt("adminPort", 8728),
-                    primaryDns = profObj.optString("primaryDns", "8.8.8.8"),
-                    secondaryDns = profObj.optString("secondaryDns", "1.1.1.1"),
-                    approvedSubnet = profObj.optString("approvedSubnet", "10.10.0.0/16"),
-                    rateZone = profObj.optString("rateZone", "SANAA"),
-                    defaultUsdRateMicros = profObj.optLong("defaultUsdRateMicros", 535_000_000L),
-                    defaultSarRateMicros = profObj.optLong("defaultSarRateMicros", 140_500_000L),
-                    updatedAt = profObj.optLong("updatedAt", System.currentTimeMillis())
-                )
-                saveProfileToPrefs(profileDto)
-                effectiveNetworkRepository?.restoreNetworkProfile(profileDto)
-            }
-
-            // 17. Restore Network Subnets
-            val subnetsJsonArr = root.optJSONArray("network_subnets") ?: root.optJSONArray("networkSubnets")
-            if (subnetsJsonArr != null && subnetsJsonArr.length() > 0) {
-                val restoredSubnets = mutableListOf<SubnetRange>()
-                for (i in 0 until subnetsJsonArr.length()) {
-                    val sObj = subnetsJsonArr.getJSONObject(i)
-                    restoredSubnets.add(
-                        SubnetRange(
-                            id = sObj.optString("id", UUID.randomUUID().toString()),
-                            name = sObj.getString("name"),
-                            cidr = sObj.getString("cidr"),
-                            gateway = sObj.getString("gateway"),
-                            dhcpRangeStart = sObj.optString("dhcpRangeStart", ""),
-                            dhcpRangeEnd = sObj.optString("dhcpRangeEnd", ""),
-                            purpose = sObj.optString("purpose", "")
-                        )
-                    )
-                }
-                effectiveNetworkRepository?.restoreSubnets(restoredSubnets)
-            }
+            auditStmt.close()
 
             // Re-install SQLite triggers
             AppDatabase.installTriggers(sdb)
@@ -832,90 +684,12 @@ class BackupRestoreUseCase(
             invariants.verifyAll(failFast = true)
         }
 
+        // 16. Restore Network Hub (Network Identity, Mikrotik Devices, Subnets)
+        if (root.has("network_hub") && networkRepository != null) {
+            networkRepository.restoreAllNetworkDataFromJson(root.getJSONObject("network_hub"))
+        }
+
         "تمت استعادة البيانات بنجاح ومطابقة تسلسل المستندات والثوابت المحاسبية 100%"
-    }
-
-    suspend fun createBackupPayload(): AppBackupData {
-        val rawJson = exportDatabaseToJson()
-        return DataJsonHelper.parseBackupDataFromJson(rawJson)
-    }
-
-    suspend fun exportData(): String = exportDatabaseToJson()
-
-    suspend fun restoreBackup(payload: AppBackupData): Result<String> {
-        val json = DataJsonHelper.exportBackupDataToJson(payload)
-        return restoreDatabaseFromJson(json)
-    }
-
-    suspend fun importData(payload: AppBackupData): Result<String> = restoreBackup(payload)
-
-    suspend fun restoreBackup(jsonString: String): Result<String> = restoreDatabaseFromJson(jsonString)
-
-    suspend fun importData(jsonString: String): Result<String> = restoreDatabaseFromJson(jsonString)
-
-    private fun extractProfileFromPrefs(): NetworkProfileBackupDto? {
-        val prefs = context?.getSharedPreferences("sammikrotik_network_prefs", Context.MODE_PRIVATE) ?: return null
-        if (!prefs.contains("network_name") && !prefs.contains("networkName")) return null
-        return NetworkProfileBackupDto(
-            networkName = prefs.getString("network_name", null) ?: prefs.getString("networkName", "شبكة توزيع الإنترنت") ?: "شبكة توزيع الإنترنت",
-            ownerName = prefs.getString("owner_name", null) ?: prefs.getString("ownerName", "مدير الشبكة") ?: "مدير الشبكة",
-            location = prefs.getString("location", "المركز الرئيسي") ?: "المركز الرئيسي",
-            welcomeMessage = prefs.getString("welcome_message", null) ?: prefs.getString("welcomeMessage", "أهلاً بكم في شبكتنا - إنترنت فائق السرعة") ?: "أهلاً بكم في شبكتنا - إنترنت فائق السرعة",
-            supportPhone = prefs.getString("support_phone", null) ?: prefs.getString("supportPhone", "770000000") ?: "770000000",
-            supportWhatsapp = prefs.getString("support_whatsapp", null) ?: prefs.getString("supportWhatsapp", "967770000000") ?: "967770000000",
-            mainRouterModel = prefs.getString("main_router_model", null) ?: prefs.getString("mainRouterModel", "MikroTik CCR2004-16G-2S+") ?: "MikroTik CCR2004-16G-2S+",
-            routerOsVersion = prefs.getString("router_os_version", null) ?: prefs.getString("routerOsVersion", "v7.16") ?: "v7.16",
-            hotspotDomain = prefs.getString("hotspot_domain", null) ?: prefs.getString("hotspotDomain", "login.net") ?: "login.net",
-            hotspotServerName = prefs.getString("hotspot_server_name", null) ?: prefs.getString("hotspotServerName", "hotspot1") ?: "hotspot1",
-            adminPort = prefs.getInt("admin_port", prefs.getInt("adminPort", 8728)),
-            primaryDns = prefs.getString("primary_dns", null) ?: prefs.getString("primaryDns", "8.8.8.8") ?: "8.8.8.8",
-            secondaryDns = prefs.getString("secondary_dns", null) ?: prefs.getString("secondaryDns", "1.1.1.1") ?: "1.1.1.1",
-            approvedSubnet = prefs.getString("approved_subnet", null) ?: prefs.getString("approvedSubnet", "10.10.0.0/16") ?: "10.10.0.0/16",
-            rateZone = prefs.getString("rate_zone", null) ?: prefs.getString("rateZone", "SANAA") ?: "SANAA",
-            defaultUsdRateMicros = prefs.getLong("default_usd_rate_micros", prefs.getLong("defaultUsdRateMicros", 535_000_000L)),
-            defaultSarRateMicros = prefs.getLong("default_sar_rate_micros", prefs.getLong("defaultSarRateMicros", 140_500_000L)),
-            updatedAt = prefs.getLong("updated_at", prefs.getLong("updatedAt", System.currentTimeMillis()))
-        )
-    }
-
-    private fun saveProfileToPrefs(dto: NetworkProfileBackupDto) {
-        context?.getSharedPreferences("sammikrotik_network_prefs", Context.MODE_PRIVATE)?.edit()
-            ?.putString("network_name", dto.networkName)
-            ?.putString("networkName", dto.networkName)
-            ?.putString("owner_name", dto.ownerName)
-            ?.putString("ownerName", dto.ownerName)
-            ?.putString("location", dto.location)
-            ?.putString("welcome_message", dto.welcomeMessage)
-            ?.putString("welcomeMessage", dto.welcomeMessage)
-            ?.putString("support_phone", dto.supportPhone)
-            ?.putString("supportPhone", dto.supportPhone)
-            ?.putString("support_whatsapp", dto.supportWhatsapp)
-            ?.putString("supportWhatsapp", dto.supportWhatsapp)
-            ?.putString("main_router_model", dto.mainRouterModel)
-            ?.putString("mainRouterModel", dto.mainRouterModel)
-            ?.putString("router_os_version", dto.routerOsVersion)
-            ?.putString("routerOsVersion", dto.routerOsVersion)
-            ?.putString("hotspot_domain", dto.hotspotDomain)
-            ?.putString("hotspotDomain", dto.hotspotDomain)
-            ?.putString("hotspot_server_name", dto.hotspotServerName)
-            ?.putString("hotspotServerName", dto.hotspotServerName)
-            ?.putInt("admin_port", dto.adminPort)
-            ?.putInt("adminPort", dto.adminPort)
-            ?.putString("primary_dns", dto.primaryDns)
-            ?.putString("primaryDns", dto.primaryDns)
-            ?.putString("secondary_dns", dto.secondaryDns)
-            ?.putString("secondaryDns", dto.secondaryDns)
-            ?.putString("approved_subnet", dto.approvedSubnet)
-            ?.putString("approvedSubnet", dto.approvedSubnet)
-            ?.putString("rate_zone", dto.rateZone)
-            ?.putString("rateZone", dto.rateZone)
-            ?.putLong("default_usd_rate_micros", dto.defaultUsdRateMicros)
-            ?.putLong("defaultUsdRateMicros", dto.defaultUsdRateMicros)
-            ?.putLong("default_sar_rate_micros", dto.defaultSarRateMicros)
-            ?.putLong("defaultSarRateMicros", dto.defaultSarRateMicros)
-            ?.putLong("updated_at", dto.updatedAt)
-            ?.putLong("updatedAt", dto.updatedAt)
-            ?.apply()
     }
 
     private fun sha256(input: String): String {
