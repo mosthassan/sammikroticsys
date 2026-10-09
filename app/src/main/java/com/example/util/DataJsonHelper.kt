@@ -2,7 +2,21 @@ package com.example.util
 
 import com.example.core.model.CurrencyCode
 import com.example.data.ledger.PurchaseItemSpec
+import com.example.data.local.entity.AllocationEntity
+import com.example.data.local.entity.AssetEntity
+import com.example.data.local.entity.CardPackageEntity
+import com.example.data.local.entity.CurrencyRateEntity
+import com.example.data.local.entity.DepreciationRunEntity
+import com.example.data.local.entity.DocumentEntity
+import com.example.data.local.entity.DocumentItemEntity
+import com.example.data.local.entity.FiscalPeriodEntity
+import com.example.data.local.entity.JournalEntryEntity
+import com.example.data.local.entity.JournalLineEntity
+import com.example.data.local.entity.NumberSequenceEntity
 import com.example.data.local.entity.PartyEntity
+import com.example.data.local.entity.StockMovementEntity
+import com.example.data.local.entity.TreasuryAccountEntity
+import com.example.data.network.DeviceEntity
 import com.example.data.network.DeviceStatus
 import com.example.data.network.DeviceType
 import com.example.data.network.NetworkDevice
@@ -10,6 +24,51 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 import kotlin.math.roundToLong
+
+data class NetworkProfileBackupDto(
+    val networkName: String = "شبكة توزيع الإنترنت",
+    val ownerName: String = "مدير الشبكة",
+    val location: String = "المركز الرئيسي",
+    val welcomeMessage: String = "أهلاً بكم في شبكتنا - إنترنت فائق السرعة",
+    val supportPhone: String = "770000000",
+    val supportWhatsapp: String = "967770000000",
+    val mainRouterModel: String = "MikroTik CCR2004-16G-2S+",
+    val routerOsVersion: String = "v7.16",
+    val hotspotDomain: String = "login.net",
+    val hotspotServerName: String = "hotspot1",
+    val adminPort: Int = 8728,
+    val primaryDns: String = "8.8.8.8",
+    val secondaryDns: String = "1.1.1.1",
+    val approvedSubnet: String = "10.10.0.0/16",
+    val rateZone: String = "SANAA",
+    val defaultUsdRateMicros: Long = 535_000_000L,
+    val defaultSarRateMicros: Long = 140_500_000L,
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+data class AppBackupData(
+    val schemaVersion: Int = 1,
+    val timestamp: Long = System.currentTimeMillis(),
+    val parties: List<PartyEntity> = emptyList(),
+    val packages: List<CardPackageEntity> = emptyList(),
+    val treasuries: List<TreasuryAccountEntity> = emptyList(),
+    val documents: List<DocumentEntity> = emptyList(),
+    val documentItems: List<DocumentItemEntity> = emptyList(),
+    val journalEntries: List<JournalEntryEntity> = emptyList(),
+    val journalLines: List<JournalLineEntity> = emptyList(),
+    val allocations: List<AllocationEntity> = emptyList(),
+    val assets: List<AssetEntity> = emptyList(),
+    val depreciationRuns: List<DepreciationRunEntity> = emptyList(),
+    val numberSequences: List<NumberSequenceEntity> = emptyList(),
+    val fiscalPeriods: List<FiscalPeriodEntity> = emptyList(),
+    val currencyRates: List<CurrencyRateEntity> = emptyList(),
+    val stockMovements: List<StockMovementEntity> = emptyList(),
+    val networkDevices: List<DeviceEntity> = emptyList(),
+    val networkProfile: NetworkProfileBackupDto? = null,
+    val sha256: String = ""
+)
+
+typealias CompleteBackupPayload = AppBackupData
 
 object DataJsonHelper {
 
@@ -469,5 +528,139 @@ object DataJsonHelper {
             }
         }
         return list
+    }
+
+    // ==========================================
+    // 4. Complete Backup Data JSON (Full Backward Compatibility)
+    // ==========================================
+
+    fun parseBackupDataFromJson(jsonString: String): AppBackupData {
+        val root = JSONObject(jsonString)
+        val schemaVer = root.optInt("schemaVersion", 1)
+        val ts = root.optLong("timestamp", System.currentTimeMillis())
+        val sha = root.optString("sha256", "")
+
+        // Parse network devices with full backward compatibility
+        val devicesArr = root.optJSONArray("network_devices") ?: root.optJSONArray("networkDevices")
+        val devices = mutableListOf<DeviceEntity>()
+        if (devicesArr != null) {
+            for (i in 0 until devicesArr.length()) {
+                val obj = devicesArr.getJSONObject(i)
+                val typeStr = obj.optString("deviceType", DeviceType.ACCESS_POINT.name)
+                val statusStr = obj.optString("status", DeviceStatus.ONLINE.name)
+                devices.add(
+                    NetworkDevice(
+                        id = obj.optString("id", UUID.randomUUID().toString()),
+                        name = obj.getString("name"),
+                        ipAddress = obj.getString("ipAddress"),
+                        deviceType = runCatching { DeviceType.valueOf(typeStr) }.getOrDefault(DeviceType.ACCESS_POINT),
+                        macAddress = obj.optString("macAddress", ""),
+                        towerLocation = obj.optString("towerLocation", "البرج الرئيسي"),
+                        frequency = obj.optString("frequency", "5500 MHz"),
+                        channelWidth = obj.optString("channelWidth", "20/40 MHz"),
+                        status = runCatching { DeviceStatus.valueOf(statusStr) }.getOrDefault(DeviceStatus.ONLINE),
+                        notes = obj.optString("notes", ""),
+                        model = obj.optString("model", "MikroTik RouterBOARD"),
+                        managementPort = obj.optInt("managementPort", 8728),
+                        subnet = obj.optString("subnet", "10.10.1.0/24"),
+                        credentials = obj.optString("credentials", "admin")
+                    )
+                )
+            }
+        }
+
+        // Parse network profile with full backward compatibility
+        val profObj = root.optJSONObject("network_profile") ?: root.optJSONObject("networkProfile")
+        val profile = profObj?.let {
+            NetworkProfileBackupDto(
+                networkName = it.optString("networkName", "شبكة توزيع الإنترنت"),
+                ownerName = it.optString("ownerName", "مدير الشبكة"),
+                location = it.optString("location", "المركز الرئيسي"),
+                welcomeMessage = it.optString("welcomeMessage", "أهلاً بكم في شبكتنا - إنترنت فائق السرعة"),
+                supportPhone = it.optString("supportPhone", "770000000"),
+                supportWhatsapp = it.optString("supportWhatsapp", "967770000000"),
+                mainRouterModel = it.optString("mainRouterModel", "MikroTik CCR2004-16G-2S+"),
+                routerOsVersion = it.optString("routerOsVersion", "v7.16"),
+                hotspotDomain = it.optString("hotspotDomain", "login.net"),
+                hotspotServerName = it.optString("hotspotServerName", "hotspot1"),
+                adminPort = it.optInt("adminPort", 8728),
+                primaryDns = it.optString("primaryDns", "8.8.8.8"),
+                secondaryDns = it.optString("secondaryDns", "1.1.1.1"),
+                approvedSubnet = it.optString("approvedSubnet", "10.10.0.0/16"),
+                rateZone = it.optString("rateZone", "SANAA"),
+                defaultUsdRateMicros = it.optLong("defaultUsdRateMicros", 535_000_000L),
+                defaultSarRateMicros = it.optLong("defaultSarRateMicros", 140_500_000L),
+                updatedAt = it.optLong("updatedAt", System.currentTimeMillis())
+            )
+        }
+
+        return AppBackupData(
+            schemaVersion = schemaVer,
+            timestamp = ts,
+            networkDevices = devices,
+            networkProfile = profile,
+            sha256 = sha
+        )
+    }
+
+    fun exportBackupDataToJson(data: AppBackupData): String {
+        val root = JSONObject()
+        root.put("schemaVersion", data.schemaVersion)
+        root.put("timestamp", data.timestamp)
+
+        // Devices
+        val devArr = JSONArray()
+        data.networkDevices.forEach { d ->
+            val obj = JSONObject().apply {
+                put("id", d.id)
+                put("name", d.name)
+                put("ipAddress", d.ipAddress)
+                put("deviceType", d.deviceType.name)
+                put("macAddress", d.macAddress)
+                put("towerLocation", d.towerLocation)
+                put("frequency", d.frequency)
+                put("channelWidth", d.channelWidth)
+                put("status", d.status.name)
+                put("notes", d.notes)
+                put("model", d.model)
+                put("managementPort", d.managementPort)
+                put("subnet", d.subnet)
+                put("credentials", d.credentials)
+            }
+            devArr.put(obj)
+        }
+        root.put("network_devices", devArr)
+        root.put("networkDevices", devArr)
+
+        // Profile
+        data.networkProfile?.let { p ->
+            val obj = JSONObject().apply {
+                put("networkName", p.networkName)
+                put("ownerName", p.ownerName)
+                put("location", p.location)
+                put("welcomeMessage", p.welcomeMessage)
+                put("supportPhone", p.supportPhone)
+                put("supportWhatsapp", p.supportWhatsapp)
+                put("mainRouterModel", p.mainRouterModel)
+                put("routerOsVersion", p.routerOsVersion)
+                put("hotspotDomain", p.hotspotDomain)
+                put("hotspotServerName", p.hotspotServerName)
+                put("adminPort", p.adminPort)
+                put("primaryDns", p.primaryDns)
+                put("secondaryDns", p.secondaryDns)
+                put("approvedSubnet", p.approvedSubnet)
+                put("rateZone", p.rateZone)
+                put("defaultUsdRateMicros", p.defaultUsdRateMicros)
+                put("defaultSarRateMicros", p.defaultSarRateMicros)
+                put("updatedAt", p.updatedAt)
+            }
+            root.put("network_profile", obj)
+            root.put("networkProfile", obj)
+        }
+
+        if (data.sha256.isNotBlank()) {
+            root.put("sha256", data.sha256)
+        }
+        return root.toString(2)
     }
 }

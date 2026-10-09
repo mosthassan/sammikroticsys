@@ -419,6 +419,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         exchangeRate: ExchangeRate,
         allocations: List<InvoiceAllocationSpec>,
         notes: String,
+        rateZone: RateZone = RateZone.DEFAULT,
+        rateSource: com.example.core.model.RateSource = com.example.core.model.RateSource.SYSTEM_DAILY,
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
@@ -435,7 +437,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     currency = currency,
                     exchangeRate = exchangeRate,
                     allocations = allocations,
-                    notes = notes
+                    notes = notes,
+                    rateZone = rateZone,
+                    rateSource = rateSource
                 )
                 _userMessage.emit("تم ترحيل سند القبض وتخصيصه بنجاح")
                 refreshDashboard()
@@ -456,6 +460,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         customExpenseCode: String? = null,
         invoiceAllocations: List<InvoiceAllocationSpec> = emptyList(),
         notes: String,
+        rateZone: RateZone = RateZone.DEFAULT,
+        rateSource: com.example.core.model.RateSource = com.example.core.model.RateSource.SYSTEM_DAILY,
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
@@ -474,7 +480,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     paymentType = paymentType,
                     customExpenseCode = customExpenseCode,
                     invoiceAllocations = invoiceAllocations,
-                    notes = notes
+                    notes = notes,
+                    rateZone = rateZone,
+                    rateSource = rateSource
                 )
                 _userMessage.emit("تم ترحيل سند الصرف بنجاح")
                 refreshDashboard()

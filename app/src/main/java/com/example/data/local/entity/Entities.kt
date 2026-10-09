@@ -270,3 +270,5 @@ data class IdempotencyKeyEntity(
     val docId: String,
     val createdAt: Long = System.currentTimeMillis()
 )
+
+typealias DeviceEntity = com.example.data.network.NetworkDevice

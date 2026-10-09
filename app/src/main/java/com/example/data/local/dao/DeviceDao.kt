@@ -3,6 +3,8 @@ package com.example.data.local.dao
 import androidx.room.Query
 import com.example.data.network.NetworkDevice
 
+typealias DeviceEntity = NetworkDevice
+
 /**
  * Data Access Object definition for Network Devices and Real-Time IP Conflict Resolution.
  */
@@ -20,4 +22,8 @@ interface DeviceDao {
     suspend fun updateDevice(device: NetworkDevice)
 
     suspend fun deleteDevice(deviceId: String)
+
+    suspend fun insertAll(devices: List<NetworkDevice>)
+
+    suspend fun deleteAllDevices()
 }

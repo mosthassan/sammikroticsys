@@ -88,14 +88,18 @@ import androidx.compose.ui.unit.sp
 import com.example.core.model.CurrencyCode
 import com.example.core.model.ExchangeRate
 import com.example.core.model.Money
+import com.example.core.model.RateSource
+import com.example.core.model.RateZone
 import com.example.data.ledger.PaymentVoucherType
 import com.example.data.local.AppDatabase
 import com.example.data.local.entity.DocumentEntity
 import com.example.data.local.entity.PartyEntity
 import com.example.data.local.entity.TreasuryAccountEntity
+import com.example.data.network.NetworkConfig
 import com.example.domain.usecase.ExchangeRateResolver
 import com.example.ui.components.ExchangeRateCard
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.saveable.rememberSaveable
 import com.example.ui.components.AmountSemanticType
 import com.example.ui.components.AmountText
 import com.example.ui.components.StatusChip
@@ -495,6 +499,8 @@ fun VouchersScreen(
         }
     }
 
+    val networkConfig by viewModel.networkRepository.config.collectAsState()
+
     // Modern Full-Experience Modal Bottom Sheet for Voucher Creation
     if (showVoucherCreationSheet) {
         VoucherCreationBottomSheet(
@@ -502,8 +508,9 @@ fun VouchersScreen(
             parties = parties,
             treasuries = treasuries,
             resolver = viewModel.exchangeRateResolver,
+            networkConfig = networkConfig,
             onDismiss = { showVoucherCreationSheet = false },
-            onSubmitReceipt = { partyId, treasuryId, amountMinor, currency, rate, notes ->
+            onSubmitReceipt = { partyId, treasuryId, amountMinor, currency, rate, rateZone, notes ->
                 viewModel.postCustomerReceipt(
                     partyId = partyId,
                     treasuryId = treasuryId,
@@ -512,10 +519,11 @@ fun VouchersScreen(
                     exchangeRate = rate,
                     allocations = emptyList(),
                     notes = notes,
+                    rateZone = rateZone,
                     onSuccess = { showVoucherCreationSheet = false }
                 )
             },
-            onSubmitPayment = { recipientId, treasuryId, amountMinor, currency, rate, paymentType, customExp, notes ->
+            onSubmitPayment = { recipientId, treasuryId, amountMinor, currency, rate, rateZone, paymentType, customExp, notes ->
                 viewModel.postPaymentVoucher(
                     recipientPartyId = recipientId,
                     treasuryId = treasuryId,
@@ -526,6 +534,7 @@ fun VouchersScreen(
                     customExpenseCode = customExp,
                     invoiceAllocations = emptyList(),
                     notes = notes,
+                    rateZone = rateZone,
                     onSuccess = { showVoucherCreationSheet = false }
                 )
             }
@@ -701,17 +710,22 @@ fun VoucherCreationBottomSheet(
     parties: List<PartyEntity>,
     treasuries: List<TreasuryAccountEntity>,
     resolver: ExchangeRateResolver? = null,
+    networkConfig: NetworkConfig? = null,
     onDismiss: () -> Unit,
-    onSubmitReceipt: (partyId: String, treasuryId: String, amountMinor: Long, currency: CurrencyCode, rate: ExchangeRate, notes: String) -> Unit,
-    onSubmitPayment: (recipientId: String, treasuryId: String, amountMinor: Long, currency: CurrencyCode, rate: ExchangeRate, paymentType: PaymentVoucherType, customExp: String?, notes: String) -> Unit
+    onSubmitReceipt: (partyId: String, treasuryId: String, amountMinor: Long, currency: CurrencyCode, rate: ExchangeRate, rateZone: RateZone, notes: String) -> Unit,
+    onSubmitPayment: (recipientId: String, treasuryId: String, amountMinor: Long, currency: CurrencyCode, rate: ExchangeRate, rateZone: RateZone, paymentType: PaymentVoucherType, customExp: String?, notes: String) -> Unit
 ) {
     var voucherMode by remember { mutableIntStateOf(initialTab) } // 0: Receipt, 1: Payment
     val isReceipt = voucherMode == 0
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     val context = androidx.compose.ui.platform.LocalContext.current
+    val effectiveConfig = networkConfig ?: remember {
+        com.example.data.network.NetworkRepository(context).config.value
+    }
     val effectiveResolver = resolver ?: remember { ExchangeRateResolver(AppDatabase.getInstance(context)) }
     val today = remember { java.time.LocalDate.now().toEpochDay() }
+    val inheritedZone = effectiveConfig.rateZone
 
     // Form States
     val customers = remember(parties) {
@@ -735,16 +749,55 @@ fun VoucherCreationBottomSheet(
     val activeTreasury = treasuries.firstOrNull { it.id == selectedTreasuryId }
     val currency = CurrencyCode.fromString(activeTreasury?.currency ?: "YER")
 
-    var resolvedRate by remember { mutableStateOf<ExchangeRate?>(null) }
-    LaunchedEffect(currency) {
-        if (currency == CurrencyCode.FUNCTIONAL) {
-            resolvedRate = ExchangeRate.parity(CurrencyCode.FUNCTIONAL)
-        } else {
-            try {
-                resolvedRate = effectiveResolver.resolve(currency, today)
-            } catch (e: Exception) {
-                resolvedRate = null
+    var rateInputText by rememberSaveable(currency, inheritedZone) { mutableStateOf("1.0") }
+    var isRateManuallyEdited by rememberSaveable(currency, inheritedZone) { mutableStateOf(false) }
+
+    LaunchedEffect(currency, inheritedZone, effectiveConfig) {
+        when (currency) {
+            CurrencyCode.YER -> {
+                rateInputText = "1.0"
+                isRateManuallyEdited = false
             }
+            CurrencyCode.USD -> {
+                val defaultRateMicros = effectiveConfig.defaultUsdRateMicros.takeIf { it > 0L }
+                    ?: effectiveResolver.resolveOrNull(CurrencyCode.USD, today, inheritedZone)?.rateMicros
+                    ?: if (inheritedZone == RateZone.ADEN) 1_600_000_000L else 535_000_000L
+                rateInputText = ExchangeRate.formatRateMicros(defaultRateMicros)
+                isRateManuallyEdited = false
+            }
+            CurrencyCode.SAR -> {
+                val defaultRateMicros = effectiveConfig.defaultSarRateMicros.takeIf { it > 0L }
+                    ?: effectiveResolver.resolveOrNull(CurrencyCode.SAR, today, inheritedZone)?.rateMicros
+                    ?: if (inheritedZone == RateZone.ADEN) 420_000_000L else 140_500_000L
+                rateInputText = ExchangeRate.formatRateMicros(defaultRateMicros)
+                isRateManuallyEdited = false
+            }
+        }
+    }
+
+    val parsedRateMicros: Long? = remember(currency, rateInputText) {
+        if (currency == CurrencyCode.FUNCTIONAL) {
+            ExchangeRate.SCALE_MICROS
+        } else {
+            ExchangeRate.parseRateFromUserInput(rateInputText) ?: when (currency) {
+                CurrencyCode.USD -> effectiveConfig.defaultUsdRateMicros
+                CurrencyCode.SAR -> effectiveConfig.defaultSarRateMicros
+                else -> null
+            }
+        }
+    }
+
+    val effectiveRate: ExchangeRate? = remember(currency, parsedRateMicros) {
+        if (currency == CurrencyCode.FUNCTIONAL) {
+            ExchangeRate.parity(CurrencyCode.FUNCTIONAL)
+        } else if (parsedRateMicros != null && parsedRateMicros > 0L) {
+            ExchangeRate(
+                fromCurrency = currency,
+                toCurrency = CurrencyCode.FUNCTIONAL,
+                rateMicros = parsedRateMicros
+            )
+        } else {
+            null
         }
     }
 
@@ -1124,10 +1177,122 @@ fun VoucherCreationBottomSheet(
                 }
 
                 if (currency != CurrencyCode.FUNCTIONAL) {
-                    ExchangeRateCard(
-                        currency = currency,
-                        rate = resolvedRate
-                    )
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(BorderStroke(1.dp, themeColor.copy(alpha = 0.4f)), RoundedCornerShape(12.dp)),
+                        color = CyberDarkCardElevated
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Bolt,
+                                        contentDescription = null,
+                                        tint = themeColor,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "سعر الصرف المعتمد من هوية الشبكة:",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = TextSecondaryDark
+                                    )
+                                }
+                                Surface(
+                                    color = if (inheritedZone == RateZone.SANAA) MikroTikCyan.copy(alpha = 0.18f) else StatusWarning.copy(alpha = 0.18f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = BorderStroke(1.dp, if (inheritedZone == RateZone.SANAA) MikroTikCyan.copy(alpha = 0.4f) else StatusWarning.copy(alpha = 0.4f))
+                                ) {
+                                    Text(
+                                        text = if (inheritedZone == RateZone.SANAA) "نطاق صنعاء (مرتبط تلقائياً)" else "نطاق عدن (مرتبط تلقائياً)",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (inheritedZone == RateZone.SANAA) MikroTikCyan else StatusWarning,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                    )
+                                }
+                            }
+
+                            OutlinedTextField(
+                                value = rateInputText,
+                                onValueChange = {
+                                    rateInputText = it
+                                    isRateManuallyEdited = true
+                                },
+                                label = { Text("سعر الصرف المعتمد للسند (1 ${currency.name} مقابل YER)") },
+                                placeholder = { Text("أدخل سعر الصرف...") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                singleLine = true,
+                                trailingIcon = {
+                                    if (isRateManuallyEdited) {
+                                        TextButton(
+                                            onClick = {
+                                                rateInputText = when (currency) {
+                                                    CurrencyCode.USD -> ExchangeRate.formatRateMicros(
+                                                        effectiveConfig.defaultUsdRateMicros.takeIf { it > 0L }
+                                                            ?: if (inheritedZone == RateZone.ADEN) 1_600_000_000L else 535_000_000L
+                                                    )
+                                                    CurrencyCode.SAR -> ExchangeRate.formatRateMicros(
+                                                        effectiveConfig.defaultSarRateMicros.takeIf { it > 0L }
+                                                            ?: if (inheritedZone == RateZone.ADEN) 420_000_000L else 140_500_000L
+                                                    )
+                                                    else -> "1.0"
+                                                }
+                                                isRateManuallyEdited = false
+                                            }
+                                        ) {
+                                            Text("استعادة الافتراضي", fontSize = 11.sp, color = themeColor)
+                                        }
+                                    }
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("input_voucher_exchange_rate"),
+                                shape = RoundedCornerShape(10.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = themeColor,
+                                    unfocusedBorderColor = CyberBorder,
+                                    focusedTextColor = TextPrimaryDark,
+                                    unfocusedTextColor = TextPrimaryDark,
+                                    focusedContainerColor = CyberDarkSurface,
+                                    unfocusedContainerColor = CyberDarkSurface
+                                )
+                            )
+
+                            if (effectiveRate != null && amountMinor > 0L) {
+                                val equivalentYerMinor = effectiveRate.convert(amountMinor)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "المعادل بالريال اليمني (الأثر المحاسبي):",
+                                        fontSize = 11.sp,
+                                        color = TextSecondaryDark
+                                    )
+                                    Text(
+                                        Money(equivalentYerMinor, CurrencyCode.YER).format(),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = themeColor,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Amount Input + Quick Chips (Smooth LazyRow, NO STRETCHING, NO GAPS)
@@ -1221,7 +1386,7 @@ fun VoucherCreationBottomSheet(
                             val rate = if (currency == CurrencyCode.FUNCTIONAL) {
                                 ExchangeRate.parity(CurrencyCode.FUNCTIONAL)
                             } else {
-                                resolvedRate ?: error("Exchange rate not resolved for $currency")
+                                effectiveRate ?: error("Exchange rate not resolved for $currency")
                             }
                             if (isReceipt) {
                                 onSubmitReceipt(
@@ -1230,6 +1395,7 @@ fun VoucherCreationBottomSheet(
                                     amountMinor,
                                     currency,
                                     rate,
+                                    inheritedZone,
                                     notes
                                 )
                             } else {
@@ -1239,6 +1405,7 @@ fun VoucherCreationBottomSheet(
                                     amountMinor,
                                     currency,
                                     rate,
+                                    inheritedZone,
                                     paymentType,
                                     null,
                                     notes
@@ -1246,7 +1413,7 @@ fun VoucherCreationBottomSheet(
                             }
                         }
                     },
-                    enabled = amountMinor > 0L && (currency == CurrencyCode.FUNCTIONAL || resolvedRate != null),
+                    enabled = amountMinor > 0L && (currency == CurrencyCode.FUNCTIONAL || (effectiveRate != null && effectiveRate.rateMicros > 0L)),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = themeColor,
                         disabledContainerColor = CyberDarkCardElevated
