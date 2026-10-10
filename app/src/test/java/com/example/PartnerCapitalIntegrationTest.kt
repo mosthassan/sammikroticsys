@@ -5,10 +5,13 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.core.ledger.AccountConstants
 import com.example.core.model.CurrencyCode
 import com.example.core.model.ExchangeRate
+import com.example.core.model.RateZone
 import com.example.data.ledger.LedgerInvariants
 import com.example.data.ledger.LedgerWriter
 import com.example.data.local.AppDatabase
 import com.example.data.local.entity.PartyEntity
+import com.example.data.network.NetworkConfig
+import com.example.domain.usecase.PartnerEquityUseCase
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -208,6 +211,89 @@ class PartnerCapitalIntegrationTest {
 
             // Verify invariants pass completely
             invariants.verifyAll()
+        }
+    }
+
+    @Test
+    fun testCapitalContributionInheritsRateZoneAndResolvesDynamically() {
+        runBlocking {
+            val partnerEquityUseCase = PartnerEquityUseCase(db, writer)
+            val today = LocalDate.of(2026, 1, 15).toEpochDay()
+
+            val adenConfig = NetworkConfig(
+                networkName = "شبكة عدن العالمية",
+                rateZone = RateZone.ADEN,
+                defaultUsdRateMicros = 1_650_000_000L,
+                defaultSarRateMicros = 435_000_000L
+            )
+
+            // Verify resolution for Aden
+            val adenUsdRate = partnerEquityUseCase.resolveContributionRate(
+                currency = CurrencyCode.USD,
+                dateEpochDay = today,
+                rateZone = RateZone.ADEN,
+                networkConfig = adenConfig
+            )
+            assertEquals(1_650_000_000L, adenUsdRate)
+
+            val adenSarRate = partnerEquityUseCase.resolveContributionRate(
+                currency = CurrencyCode.SAR,
+                dateEpochDay = today,
+                rateZone = RateZone.ADEN,
+                networkConfig = adenConfig
+            )
+            assertEquals(435_000_000L, adenSarRate)
+
+            // Verify resolution for Sanaa fallback (seeded in DB: USD 530, SAR 140)
+            val sanaaUsdRate = partnerEquityUseCase.resolveContributionRate(
+                currency = CurrencyCode.USD,
+                dateEpochDay = today,
+                rateZone = RateZone.SANAA,
+                networkConfig = adenConfig
+            )
+            assertEquals(530_000_000L, sanaaUsdRate)
+
+            val sanaaSarRate = partnerEquityUseCase.resolveContributionRate(
+                currency = CurrencyCode.SAR,
+                dateEpochDay = today,
+                rateZone = RateZone.SANAA,
+                networkConfig = adenConfig
+            )
+            assertEquals(140_000_000L, sanaaSarRate)
+
+            // Create partner
+            val partnerId = "PARTNER_ADEN_01"
+            db.partyDao().insertParty(
+                PartyEntity(
+                    id = partnerId,
+                    name = "شريك عدن المستثمر",
+                    phone = "733000111",
+                    isPartner = true
+                )
+            )
+
+            // Post capital receipt with ADEN rateZone
+            val rate = ExchangeRate(CurrencyCode.SAR, CurrencyCode.FUNCTIONAL, adenSarRate)
+            val doc = writer.postCapitalReceipt(
+                targetAccountCode = AccountConstants.CAPITAL,
+                partnerPartyId = partnerId,
+                treasuryId = "TR_SAR_VAULT",
+                fiscalYear = 2026,
+                dateEpochDay = today,
+                amountOrigMinor = 1_000_00L, // 1000 SAR
+                currency = CurrencyCode.SAR,
+                exchangeRate = rate,
+                notes = "مساهمة رأس مال بنطاق عدن",
+                rateZone = RateZone.ADEN
+            )
+
+            assertEquals("ADEN", doc.rateZone)
+            assertEquals(435_000_000L, doc.exchangeRateMicros)
+            val expectedBase = rate.convert(1_000_00L) // 1000 * 435 = 435,000 YER -> 43,500,000 minor
+            assertEquals(expectedBase, doc.totalBaseMinor)
+
+            val check = invariants.verifyAll()
+            assertTrue(check.isValid)
         }
     }
 }

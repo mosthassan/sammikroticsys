@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Handshake
 import androidx.compose.material.icons.filled.MonetizationOn
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.PieChart
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -56,6 +57,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -70,10 +72,12 @@ import androidx.compose.ui.window.DialogProperties
 import com.example.core.model.CurrencyCode
 import com.example.core.model.ExchangeRate
 import com.example.core.model.Money
+import com.example.core.model.RateZone
 import com.example.data.local.AppDatabase
 import com.example.data.local.entity.DocumentEntity
 import com.example.data.local.entity.PartyEntity
 import com.example.data.local.entity.TreasuryAccountEntity
+import com.example.data.network.NetworkConfig
 import com.example.domain.usecase.ExchangeRateResolver
 import com.example.ui.theme.CyberBorder
 import com.example.ui.theme.CyberDarkCardElevated
@@ -101,6 +105,7 @@ fun PartnerDetailDialog(
     val partnerDocs by viewModel.getDocumentsByPartyFlow(partner.id).collectAsState(initial = emptyList())
     val treasuries by viewModel.allTreasuries.collectAsState(initial = emptyList())
     val org by viewModel.organization.collectAsState(initial = null)
+    val networkConfig by viewModel.networkRepository.config.collectAsState()
 
     var showNewContributionDialog by remember { mutableStateOf(false) }
     var docToVoid by remember { mutableStateOf<DocumentEntity?>(null) }
@@ -382,7 +387,8 @@ fun PartnerDetailDialog(
             partner = partner,
             treasuries = treasuries,
             resolver = viewModel.exchangeRateResolver,
-            onSubmitCash = { treasuryId, amountOrigMinor, curr, rate, notes ->
+            networkConfig = networkConfig,
+            onSubmitCashWithZone = { treasuryId, amountOrigMinor, curr, rate, notes, zone ->
                 viewModel.postCapitalReceipt(
                     partnerPartyId = partner.id,
                     treasuryId = treasuryId,
@@ -390,10 +396,11 @@ fun PartnerDetailDialog(
                     currency = curr,
                     exchangeRate = rate,
                     notes = notes,
+                    rateZone = zone,
                     onSuccess = { showNewContributionDialog = false }
                 )
             },
-            onSubmitInKind = { assetName, amountOrigMinor, curr, rate, usefulLife, notes ->
+            onSubmitInKindWithZone = { assetName, amountOrigMinor, curr, rate, usefulLife, notes, zone ->
                 viewModel.postInKindCapitalContribution(
                     partnerPartyId = partner.id,
                     assetName = assetName,
@@ -402,6 +409,7 @@ fun PartnerDetailDialog(
                     exchangeRate = rate,
                     usefulLifeMonths = usefulLife,
                     notes = notes,
+                    rateZone = zone,
                     onSuccess = { showNewContributionDialog = false }
                 )
             },
@@ -456,13 +464,21 @@ fun NewCapitalContributionDialog(
     partner: PartyEntity,
     treasuries: List<TreasuryAccountEntity>,
     resolver: ExchangeRateResolver? = null,
-    onSubmitCash: (treasuryId: String, amountOrigMinor: Long, curr: CurrencyCode, rate: ExchangeRate, notes: String) -> Unit,
-    onSubmitInKind: (assetName: String, amountOrigMinor: Long, curr: CurrencyCode, rate: ExchangeRate, usefulLife: Int, notes: String) -> Unit,
+    networkConfig: NetworkConfig? = null,
+    onSubmitCash: (treasuryId: String, amountOrigMinor: Long, curr: CurrencyCode, rate: ExchangeRate, notes: String) -> Unit = { _, _, _, _, _ -> },
+    onSubmitInKind: (assetName: String, amountOrigMinor: Long, curr: CurrencyCode, rate: ExchangeRate, usefulLife: Int, notes: String) -> Unit = { _, _, _, _, _, _ -> },
+    onSubmitCashWithZone: ((treasuryId: String, amountOrigMinor: Long, curr: CurrencyCode, rate: ExchangeRate, notes: String, rateZone: RateZone) -> Unit)? = null,
+    onSubmitInKindWithZone: ((assetName: String, amountOrigMinor: Long, curr: CurrencyCode, rate: ExchangeRate, usefulLife: Int, notes: String, rateZone: RateZone) -> Unit)? = null,
     onDismissRequest: () -> Unit
 ) {
     val context = LocalContext.current
+    val effectiveConfig = networkConfig ?: remember {
+        com.example.data.network.NetworkRepository(context).config.value
+    }
     val effectiveResolver = resolver ?: remember { ExchangeRateResolver(AppDatabase.getInstance(context)) }
     val today = remember { java.time.LocalDate.now().toEpochDay() }
+    val inheritedZone = effectiveConfig.rateZone
+    var selectedZone by rememberSaveable(inheritedZone) { mutableStateOf(inheritedZone) }
     var contributionType by remember { mutableIntStateOf(0) } // 0: Cash, 1: In-Kind Asset
 
     // Cash fields
@@ -470,25 +486,42 @@ fun NewCapitalContributionDialog(
     var treasuryExpanded by remember { mutableStateOf(false) }
 
     // Common fields
-    var selectedCurrency by remember { mutableStateOf(CurrencyCode.YER) }
+    var selectedCurrency by rememberSaveable { mutableStateOf(CurrencyCode.YER) }
     var currencyExpanded by remember { mutableStateOf(false) }
-    var amountText by remember { mutableStateOf("") }
-    var exchangeRateText by remember { mutableStateOf("") }
-    var resolvedRate by remember { mutableStateOf<ExchangeRate?>(null) }
-    var notesText by remember { mutableStateOf("") }
+    var amountText by rememberSaveable { mutableStateOf("") }
+    var exchangeRateText by rememberSaveable(selectedCurrency, selectedZone) { mutableStateOf("1.0") }
+    var isRateManuallyEdited by rememberSaveable(selectedCurrency, selectedZone) { mutableStateOf(false) }
+    var resolvedRate by remember { mutableStateOf<ExchangeRate?>(ExchangeRate.parity(CurrencyCode.FUNCTIONAL)) }
+    var notesText by rememberSaveable { mutableStateOf("") }
 
-    LaunchedEffect(selectedCurrency) {
-        if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
-            exchangeRateText = "1"
-            resolvedRate = ExchangeRate.parity(CurrencyCode.FUNCTIONAL)
-        } else {
-            try {
-                val r = effectiveResolver.resolve(selectedCurrency, today)
-                resolvedRate = r
-                exchangeRateText = ExchangeRate.formatRateMicros(r.rateMicros)
-            } catch (e: Exception) {
-                resolvedRate = null
-                exchangeRateText = ""
+    LaunchedEffect(selectedCurrency, selectedZone, effectiveConfig) {
+        when (selectedCurrency) {
+            CurrencyCode.YER -> {
+                exchangeRateText = "1.0"
+                resolvedRate = ExchangeRate.parity(CurrencyCode.FUNCTIONAL)
+                isRateManuallyEdited = false
+            }
+            CurrencyCode.USD -> {
+                val defaultRateMicros = if (selectedZone == effectiveConfig.rateZone && effectiveConfig.defaultUsdRateMicros > 0L) {
+                    effectiveConfig.defaultUsdRateMicros
+                } else {
+                    effectiveResolver.resolveOrNull(CurrencyCode.USD, today, selectedZone)?.rateMicros
+                        ?: if (selectedZone == RateZone.ADEN) 1_600_000_000L else 535_000_000L
+                }
+                exchangeRateText = ExchangeRate.formatRateMicros(defaultRateMicros)
+                resolvedRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, defaultRateMicros)
+                isRateManuallyEdited = false
+            }
+            CurrencyCode.SAR -> {
+                val defaultRateMicros = if (selectedZone == effectiveConfig.rateZone && effectiveConfig.defaultSarRateMicros > 0L) {
+                    effectiveConfig.defaultSarRateMicros
+                } else {
+                    effectiveResolver.resolveOrNull(CurrencyCode.SAR, today, selectedZone)?.rateMicros
+                        ?: if (selectedZone == RateZone.ADEN) 420_000_000L else 140_500_000L
+                }
+                exchangeRateText = ExchangeRate.formatRateMicros(defaultRateMicros)
+                resolvedRate = ExchangeRate(CurrencyCode.SAR, CurrencyCode.FUNCTIONAL, defaultRateMicros)
+                isRateManuallyEdited = false
             }
         }
     }
@@ -623,22 +656,60 @@ fun NewCapitalContributionDialog(
                 )
 
                 if (selectedCurrency != CurrencyCode.YER) {
+                    val zoneNameArabic = if (selectedZone == RateZone.SANAA) "نطاق صنعاء" else "نطاق عدن"
                     Spacer(modifier = Modifier.height(8.dp))
                     ExchangeRateCard(
                         currency = selectedCurrency,
-                        rate = resolvedRate
+                        rate = resolvedRate,
+                        zone = selectedZone,
+                        onZoneToggle = {
+                            selectedZone = if (selectedZone == RateZone.SANAA) RateZone.ADEN else RateZone.SANAA
+                        }
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     OutlinedTextField(
                         value = exchangeRateText,
                         onValueChange = {
                             exchangeRateText = it
+                            isRateManuallyEdited = true
                             val parsed = ExchangeRate.parseRateFromUserInput(it)
                             resolvedRate = if (parsed != null && parsed > 0L) {
                                 ExchangeRate(selectedCurrency, CurrencyCode.FUNCTIONAL, parsed)
                             } else null
                         },
-                        label = { Text("سعر الصرف المعتمد مقابل الريال اليمني (YER) - إجباري") },
+                        label = { Text("سعر الصرف المعتمد ($zoneNameArabic):") },
+                        placeholder = { Text("أدخل سعر الصرف...") },
+                        singleLine = true,
+                        trailingIcon = {
+                            if (isRateManuallyEdited) {
+                                IconButton(
+                                    onClick = {
+                                        val defaultMicros = when (selectedCurrency) {
+                                            CurrencyCode.USD -> {
+                                                if (selectedZone == effectiveConfig.rateZone && effectiveConfig.defaultUsdRateMicros > 0L) {
+                                                    effectiveConfig.defaultUsdRateMicros
+                                                } else {
+                                                    if (selectedZone == RateZone.ADEN) 1_600_000_000L else 535_000_000L
+                                                }
+                                            }
+                                            CurrencyCode.SAR -> {
+                                                if (selectedZone == effectiveConfig.rateZone && effectiveConfig.defaultSarRateMicros > 0L) {
+                                                    effectiveConfig.defaultSarRateMicros
+                                                } else {
+                                                    if (selectedZone == RateZone.ADEN) 420_000_000L else 140_500_000L
+                                                }
+                                            }
+                                            else -> ExchangeRate.SCALE_MICROS
+                                        }
+                                        exchangeRateText = ExchangeRate.formatRateMicros(defaultMicros)
+                                        resolvedRate = ExchangeRate(selectedCurrency, CurrencyCode.FUNCTIONAL, defaultMicros)
+                                        isRateManuallyEdited = false
+                                    }
+                                ) {
+                                    Icon(Icons.Default.Refresh, contentDescription = "استعادة السعر الافتراضي", tint = MikroTikCyan)
+                                }
+                            }
+                        },
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -678,23 +749,20 @@ fun NewCapitalContributionDialog(
                         }
 
                         if (contributionType == 0) {
-                            onSubmitCash(
-                                selectedTreasuryId,
-                                amtMinor,
-                                selectedCurrency,
-                                rate,
-                                if (notesText.isBlank()) "مساهمة نقدية برأس المال" else notesText
-                            )
+                            val finalNotes = if (notesText.isBlank()) "مساهمة نقدية برأس المال" else notesText
+                            if (onSubmitCashWithZone != null) {
+                                onSubmitCashWithZone(selectedTreasuryId, amtMinor, selectedCurrency, rate, finalNotes, selectedZone)
+                            } else {
+                                onSubmitCash(selectedTreasuryId, amtMinor, selectedCurrency, rate, finalNotes)
+                            }
                         } else {
                             val months = usefulLifeText.toIntOrNull() ?: 36
-                            onSubmitInKind(
-                                assetNameText.trim(),
-                                amtMinor,
-                                selectedCurrency,
-                                rate,
-                                months,
-                                if (notesText.isBlank()) "مساهمة عينية: ${assetNameText.trim()}" else notesText
-                            )
+                            val finalNotes = if (notesText.isBlank()) "مساهمة عينية: ${assetNameText.trim()}" else notesText
+                            if (onSubmitInKindWithZone != null) {
+                                onSubmitInKindWithZone(assetNameText.trim(), amtMinor, selectedCurrency, rate, months, finalNotes, selectedZone)
+                            } else {
+                                onSubmitInKind(assetNameText.trim(), amtMinor, selectedCurrency, rate, months, finalNotes)
+                            }
                         }
                     },
                     enabled = isAmountValid && isRateValid && isInKindValid,

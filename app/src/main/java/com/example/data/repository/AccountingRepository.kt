@@ -56,8 +56,31 @@ class AccountingRepository(
         return rows.firstOrNull { it.partyId == partyId }?.netBalanceMinor ?: 0L
     }
 
+    /**
+     * Returns the physical cash balance of the treasury in its native currency (minor units).
+     * For YER treasuries, this is in YER.
+     * For USD/SAR vaults, this returns the native currency balance (debit_foreign - credit_foreign).
+     */
     suspend fun getTreasuryBalance(treasuryId: String): Long {
+        return db.journalDao().getNetOrigBalanceForTreasury(treasuryId)
+    }
+
+    suspend fun getTreasuryOrigBalance(treasuryId: String): Long {
+        return db.journalDao().getNetOrigBalanceForTreasury(treasuryId)
+    }
+
+    /**
+     * Returns the accounting book value of the treasury in functional base currency (YER minor units).
+     */
+    suspend fun getTreasuryBaseBalance(treasuryId: String): Long {
         return db.journalDao().getNetDebitBalanceForTreasury(treasuryId)
+    }
+
+    /**
+     * Returns the physical cash balance across cash accounts (1101/1102) for a given currency (minor units).
+     */
+    suspend fun getCashBalanceByCurrency(currency: String): Long {
+        return db.journalDao().getNetOrigBalanceForCashAccount(currency)
     }
 
     suspend fun runInvariantCheck() = invariants.verifyAll(failFast = false)

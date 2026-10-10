@@ -271,12 +271,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val receivables = repository.getNetBalanceForAccount(AccountConstants.ACCOUNTS_RECEIVABLE)
             val payables = -repository.getNetBalanceForAccount(AccountConstants.ACCOUNTS_PAYABLE)
 
-            // Treasury balances
+            // Treasury balances (native currency units for each vault/safe)
             val treasuries = db.treasuryDao().getAllTreasuriesSync()
             val trMap = mutableMapOf<String, Long>()
             treasuries.forEach { tr ->
                 val bal = repository.getTreasuryBalance(tr.id)
                 trMap[tr.currency] = (trMap[tr.currency] ?: 0L) + bal
+            }
+            for (curr in listOf("YER", "USD", "SAR")) {
+                if (!trMap.containsKey(curr)) {
+                    trMap[curr] = repository.getCashBalanceByCurrency(curr)
+                }
             }
 
             // Invariant check
@@ -533,6 +538,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         currency: CurrencyCode,
         exchangeRate: ExchangeRate,
         notes: String,
+        rateZone: RateZone = RateZone.DEFAULT,
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
@@ -547,7 +553,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     amountOrigMinor = amountOrigMinor,
                     currency = currency,
                     exchangeRate = exchangeRate,
-                    notes = notes
+                    notes = notes,
+                    rateZone = rateZone
                 )
                 _userMessage.emit("تم تسجيل سند مساهمة رأس المال بنجاح")
                 refreshDashboard()
@@ -566,6 +573,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         exchangeRate: ExchangeRate,
         usefulLifeMonths: Int,
         notes: String,
+        rateZone: RateZone = RateZone.DEFAULT,
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
@@ -580,7 +588,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     currency = currency,
                     exchangeRate = exchangeRate,
                     usefulLifeMonths = usefulLifeMonths,
-                    notes = notes
+                    notes = notes,
+                    rateZone = rateZone
                 )
                 _userMessage.emit("تم ترحيل المساهمة العينية وقيد الأصل الثابت بنجاح")
                 refreshDashboard()

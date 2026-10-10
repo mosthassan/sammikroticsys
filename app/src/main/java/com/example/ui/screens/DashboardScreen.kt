@@ -342,6 +342,7 @@ fun DashboardScreen(
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier
                     .fillMaxWidth()
+                    .testTag("dashboard_treasury_balances_card")
                     .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
             ) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -349,9 +350,9 @@ fun DashboardScreen(
                     val usd = summary.treasuryBalancesByCurrency["USD"] ?: 0L
                     val sar = summary.treasuryBalancesByCurrency["SAR"] ?: 0L
 
-                    TreasuryBalanceRow("صندوق الريال اليمني (YER)", Money(yer, CurrencyCode.YER), SemanticIncomeGreen)
-                    TreasuryBalanceRow("خزينة الدولار الأمريكي (USD)", Money(usd, CurrencyCode.USD), MaterialTheme.colorScheme.primary)
-                    TreasuryBalanceRow("خزينة الريال السعودي (SAR)", Money(sar, CurrencyCode.SAR), SemanticWarningAmber)
+                    TreasuryBalanceRow("صندوق الريال اليمني (YER)", Money(yer, CurrencyCode.YER), SemanticIncomeGreen, Modifier.testTag("row_vault_yer"))
+                    TreasuryBalanceRow("خزينة الدولار الأمريكي (USD)", Money(usd, CurrencyCode.USD), MaterialTheme.colorScheme.primary, Modifier.testTag("row_vault_usd"))
+                    TreasuryBalanceRow("خزينة الريال السعودي (SAR)", Money(sar, CurrencyCode.SAR), SemanticWarningAmber, Modifier.testTag("row_vault_sar"))
                 }
             }
         }
@@ -394,10 +395,11 @@ fun DashboardScreen(
 fun TreasuryBalanceRow(
     title: String,
     money: Money,
-    accentColor: Color
+    accentColor: Color,
+    modifier: Modifier = Modifier
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {

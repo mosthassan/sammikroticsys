@@ -1573,7 +1573,7 @@ class LedgerWriter(
     ): DocumentEntity? = db.withTransaction {
         validatePeriodIsOpen(dateEpochDay)
         val treasury = db.treasuryDao().getTreasuryById(treasuryId) ?: error("Treasury $treasuryId not found")
-        val bookDebitBalance = db.journalDao().getNetDebitBalanceForTreasury(treasuryId)
+        val bookDebitBalance = db.journalDao().getNetOrigBalanceForTreasury(treasuryId)
         val discrepancyMinor = actualCountMinor - bookDebitBalance
 
         if (discrepancyMinor == 0L) return@withTransaction null // Perfectly matched, no entry needed
