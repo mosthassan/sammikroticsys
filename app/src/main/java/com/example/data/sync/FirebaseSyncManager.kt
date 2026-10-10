@@ -41,8 +41,7 @@ sealed class SyncStatus {
  */
 class FirebaseSyncManager(
     private val context: Context,
-    private val db: AppDatabase,
-    private val firestoreSyncManager: FirestoreSyncManager? = null
+    private val db: AppDatabase
 ) {
     private val prefs: SharedPreferences = context.getSharedPreferences("firebase_sync_prefs", Context.MODE_PRIVATE)
 
@@ -87,26 +86,6 @@ class FirebaseSyncManager(
      * Uploads local Room state and pulls remote changes for this user email.
      */
     suspend fun performFullSync(userEmail: String): Result<Int> = withContext(Dispatchers.IO) {
-        if (firestoreSyncManager != null) {
-            _syncStatus.value = SyncStatus.InProgress("جاري المزامنة الشاملة لكافة البيانات والسجلات...", 25)
-            val pushResult = firestoreSyncManager.syncPush(userEmail)
-            if (pushResult.isSuccess) {
-                val dateFormat = SimpleDateFormat("yyyy/MM/dd hh:mm a", Locale.getDefault())
-                val formattedTime = dateFormat.format(Date())
-                val recordsCount = firestoreSyncManager.syncMetadata.value?.run {
-                    totalDocuments + totalJournalLines + totalParties + totalPackages + totalNetworkDevices + totalCurrencyRates
-                } ?: 0
-                prefs.edit().putString(KEY_LAST_SYNC, formattedTime).apply()
-                _lastSyncTimestamp.value = formattedTime
-                _syncStatus.value = SyncStatus.Success(formattedTime, recordsCount)
-                return@withContext Result.success(recordsCount)
-            } else {
-                val err = pushResult.exceptionOrNull()?.localizedMessage ?: "فشل الرفع السحابي"
-                _syncStatus.value = SyncStatus.Error(err)
-                return@withContext Result.failure(pushResult.exceptionOrNull() ?: Exception(err))
-            }
-        }
-
         if (userEmail.isBlank()) {
             val err = "يجب تسجيل الدخول بحساب Google أولاً لتحديد معرف المزامنة"
             _syncStatus.value = SyncStatus.Error(err)
@@ -267,26 +246,6 @@ class FirebaseSyncManager(
      * Pull data from Firestore into local Room database
      */
     suspend fun pullDataFromCloud(userEmail: String): Result<Int> = withContext(Dispatchers.IO) {
-        if (firestoreSyncManager != null) {
-            _syncStatus.value = SyncStatus.InProgress("جاري جلب واستعادة كافة السجلات المحاسبية والشبكية...", 25)
-            val pullResult = firestoreSyncManager.syncPull(userEmail)
-            if (pullResult.isSuccess) {
-                val dateFormat = SimpleDateFormat("yyyy/MM/dd hh:mm a", Locale.getDefault())
-                val formattedTime = dateFormat.format(Date())
-                val recordsCount = firestoreSyncManager.syncMetadata.value?.run {
-                    totalDocuments + totalJournalLines + totalParties + totalPackages + totalNetworkDevices + totalCurrencyRates
-                } ?: 0
-                prefs.edit().putString(KEY_LAST_SYNC, formattedTime).apply()
-                _lastSyncTimestamp.value = formattedTime
-                _syncStatus.value = SyncStatus.Success(formattedTime, recordsCount)
-                return@withContext Result.success(recordsCount)
-            } else {
-                val err = pullResult.exceptionOrNull()?.localizedMessage ?: "فشل جلب البيانات من السحابة"
-                _syncStatus.value = SyncStatus.Error(err)
-                return@withContext Result.failure(pullResult.exceptionOrNull() ?: Exception(err))
-            }
-        }
-
         if (userEmail.isBlank()) {
             return@withContext Result.failure(IllegalStateException("البريد الإلكتروني فارغ"))
         }

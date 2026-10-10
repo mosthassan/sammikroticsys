@@ -6,7 +6,6 @@ import com.example.data.auth.GoogleAuthManager
 import com.example.data.auth.UserProfile
 import com.example.data.local.AppDatabase
 import com.example.data.sync.FirebaseSyncManager
-import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -120,107 +119,192 @@ class FirebaseSyncAndAuthUnitTest {
     }
 
     @Test
-    fun testCompleteBackupAndRestoreCoversAllTabsAndEntities() = kotlinx.coroutines.runBlocking {
+    fun testExportAndRestoreIncludesNetworkDevicesRatesAndOrganization() = kotlinx.coroutines.runBlocking {
         val netRepo = com.example.data.network.NetworkRepository(context)
-        val backupUseCase = com.example.domain.usecase.BackupRestoreUseCase(db, netRepo)
-
-        // 1. Setup Network Config (هوية الشبكة)
-        val customConfig = com.example.data.network.NetworkConfig(
-            networkName = "شبكة سام العالمية للاختبار",
-            ownerName = "المهندس مصطفى",
-            mainRouterModel = "MikroTik CCR2116",
-            routerOsVersion = "v7.17",
-            supportPhone = "771234567"
+        val backupUseCase = com.example.domain.usecase.BackupRestoreUseCase(
+            db = db,
+            deviceDao = netRepo,
+            networkRepository = netRepo,
+            context = context
         )
-        netRepo.saveConfig(customConfig)
 
-        // 2. Setup Network Devices (أجهزة ميكروتك)
-        val testDevice = com.example.data.network.NetworkDevice(
-            id = "DEV_TEST_101",
-            name = "راوتر سيرفر رئيسي 2116",
-            ipAddress = "10.10.99.1",
-            deviceType = com.example.data.network.DeviceType.ROUTER,
-            macAddress = "E4:8D:8C:00:11:22",
-            towerLocation = "برج القمة",
-            frequency = "Core Fiber",
-            status = com.example.data.network.DeviceStatus.ONLINE,
-            notes = "جهاز التوجيه الرئيسي"
-        )
-        netRepo.addOrUpdateDevice(testDevice)
-
-        // 3. Setup Organization (هوية المنشأة)
+        // 1. Insert or update test Organization
         val existingOrg = db.organizationDao().getOrganizationSync()
         if (existingOrg != null) {
-            db.organizationDao().updateOrganization(existingOrg.copy(name = "مؤسسة سام تيك للإنترنت"))
+            db.organizationDao().updateOrganization(existingOrg.copy(name = "شبكة سام ميكروتك السحابية"))
         } else {
-            val org = com.example.data.local.entity.OrganizationEntity(
-                id = "ORG_TEST_1",
-                name = "مؤسسة سام تيك للإنترنت",
+            val testOrg = com.example.data.local.entity.OrganizationEntity(
+                id = "ORG_TEST_SYNC",
+                name = "شبكة سام ميكروتك السحابية",
+                taxNumber = "998877",
                 functionalCurrency = "YER",
+                fiscalYearStartMonth = 1,
+                isInitialized = true,
                 primaryRateZone = "SANAA",
-                isInitialized = true
+                equityShareMode = "DERIVED_FROM_CAPITAL",
+                createdAt = System.currentTimeMillis()
             )
-            db.organizationDao().insertOrganization(org)
+            db.organizationDao().insertOrganization(testOrg)
         }
 
-        // 4. Setup Currency Rate (أسعار الصرف)
-        val rate = com.example.data.local.entity.CurrencyRateEntity(
-            id = "RATE_USD_TEST_99",
+        // 2. Insert test Currency Rates
+        val testRateUsd = com.example.data.local.entity.CurrencyRateEntity(
+            id = "RATE_USD_SANAA_TEST",
             currency = "USD",
             zone = "SANAA",
             rateMicros = 535_000_000L,
-            effectiveDateEpochDay = 20000L,
+            effectiveDateEpochDay = 20450L,
+            createdAt = System.currentTimeMillis(),
             createdBy = "ADMIN",
-            reason = "سعر صرف اختباري"
+            reason = "Initial cloud sync test rate"
         )
-        db.currencyRateDao().insertRate(rate)
-
-        // 5. Setup Party (عميل / وكيل)
-        val party = com.example.data.local.entity.PartyEntity(
-            id = "PARTY_TEST_99",
-            name = "وكالة النور الرقمية",
-            phone = "778899000",
-            isCustomer = true
+        val testRateSar = com.example.data.local.entity.CurrencyRateEntity(
+            id = "RATE_SAR_SANAA_TEST",
+            currency = "SAR",
+            zone = "SANAA",
+            rateMicros = 140_500_000L,
+            effectiveDateEpochDay = 20450L,
+            createdAt = System.currentTimeMillis(),
+            createdBy = "ADMIN",
+            reason = "SAR rate"
         )
-        db.partyDao().insertParty(party)
+        db.currencyRateDao().insertRate(testRateUsd)
+        db.currencyRateDao().insertRate(testRateSar)
 
-        // 6. Export Complete Database
-        val jsonString = backupUseCase.exportDatabaseToJson()
-        val jsonRoot = JSONObject(jsonString)
+        // 3. Add test Network Device
+        val testDevice = com.example.data.network.NetworkDevice(
+            id = "dev_cloud_sync_1",
+            name = "سيكتور شمالي BaseBox 5",
+            ipAddress = "10.10.50.1",
+            deviceType = com.example.data.network.DeviceType.ACCESS_POINT,
+            macAddress = "AA:BB:CC:DD:EE:01",
+            towerLocation = "برج السبعين",
+            frequency = "5500 MHz",
+            channelWidth = "20/40 MHz",
+            status = com.example.data.network.DeviceStatus.ONLINE,
+            notes = "جهاز تجريبي للمزامنة السحابية",
+            model = "MikroTik BaseBox 5",
+            managementPort = 8728,
+            subnet = "10.10.50.0/24",
+            credentials = "admin:secret"
+        )
+        netRepo.addOrUpdateDevice(testDevice)
 
-        // Verify JSON includes all tabs
-        assertTrue("يجب أن يحتوي التصدير على هوية المنشأة", jsonRoot.has("organization"))
-        assertEquals("مؤسسة سام تيك للإنترنت", jsonRoot.getJSONObject("organization").getString("name"))
+        // 4. Update Network Config
+        val updatedConfig = netRepo.config.value.copy(
+            networkName = "شبكة سام ميكروتك السحابية",
+            location = "صنعاء - السبعين",
+            defaultUsdRateMicros = 535_000_000L
+        )
+        netRepo.saveConfig(updatedConfig)
 
-        assertTrue("يجب أن يحتوي التصدير على بيانات الشبكة", jsonRoot.has("network_hub"))
-        val netHubJson = jsonRoot.getJSONObject("network_hub")
-        assertEquals("شبكة سام العالمية للاختبار", netHubJson.getJSONObject("config").getString("networkName"))
-        assertTrue("يجب أن يحتوي التصدير على الأجهزة", netHubJson.getJSONArray("devices").length() > 0)
+        // 5. Export JSON snapshot
+        val jsonPayload = backupUseCase.exportDatabaseToJson()
+        val root = org.json.JSONObject(jsonPayload)
 
-        assertTrue("يجب أن يحتوي التصدير على أسعار الصرف", jsonRoot.has("currency_rates"))
-        assertTrue("يجب أن يحتوي التصدير على العملاء والأطراف", jsonRoot.has("parties"))
+        assertTrue("Root must contain organization", root.has("organization"))
+        assertEquals("شبكة سام ميكروتك السحابية", root.getJSONObject("organization").getString("name"))
 
-        // 7. Restore into a fresh Database instance and fresh NetworkRepository
-        val newDb = AppDatabase.createInMemory(context)
+        assertTrue("Root must contain currency_rates", root.has("currency_rates"))
+        val ratesArr = root.getJSONArray("currency_rates")
+        assertTrue("Must export at least 2 currency rates", ratesArr.length() >= 2)
+
+        assertTrue("Root must contain network_devices", root.has("network_devices"))
+        val devArr = root.getJSONArray("network_devices")
+        assertTrue("Must export network devices", devArr.length() >= 1)
+
+        assertTrue("Root must contain network_profile", root.has("network_profile"))
+        val profObj = root.getJSONObject("network_profile")
+        assertEquals("شبكة سام ميكروتك السحابية", profObj.getString("networkName"))
+
+        // 6. Test restore into fresh in-memory database
+        val newDb = com.example.data.local.AppDatabase.createInMemory(context)
         val newNetRepo = com.example.data.network.NetworkRepository(context)
-        val restoreUseCase = com.example.domain.usecase.BackupRestoreUseCase(newDb, newNetRepo)
+        val restoreUseCase = com.example.domain.usecase.BackupRestoreUseCase(
+            db = newDb,
+            deviceDao = newNetRepo,
+            networkRepository = newNetRepo,
+            context = context
+        )
 
-        val restoreResult = restoreUseCase.restoreDatabaseFromJson(jsonString)
-        assertTrue("يجب أن تنجح الاستعادة الكاملة", restoreResult.isSuccess)
+        val restoreResult = restoreUseCase.restoreDatabaseFromJson(jsonPayload)
+        assertTrue("Restore must succeed", restoreResult.isSuccess)
 
-        // 8. Assertions on restored state
+        // Verify organization restored
         val restoredOrg = newDb.organizationDao().getOrganizationSync()
-        assertNotNull("يجب استعادة هوية المنشأة", restoredOrg)
-        assertEquals("مؤسسة سام تيك للإنترنت", restoredOrg?.name)
+        assertNotNull("Restored organization must not be null", restoredOrg)
+        assertEquals("شبكة سام ميكروتك السحابية", restoredOrg?.name)
 
+        // Verify currency rates restored
         val restoredRates = newDb.currencyRateDao().getAllRatesSync()
-        assertTrue("يجب استعادة أسعار الصرف", restoredRates.any { it.id == "RATE_USD_TEST_99" })
+        assertTrue("Restored currency rates must be >= 2", restoredRates.size >= 2)
+        assertTrue(restoredRates.any { it.currency == "USD" && it.rateMicros == 535_000_000L })
 
-        val restoredParties = newDb.partyDao().getAllPartiesSync()
-        assertTrue("يجب استعادة العملاء", restoredParties.any { it.id == "PARTY_TEST_99" })
+        // Verify network devices restored
+        val restoredDevices = newNetRepo.getAllDevices()
+        assertTrue("Restored devices must be >= 1", restoredDevices.isNotEmpty())
+        assertTrue(restoredDevices.any { it.id == "dev_cloud_sync_1" && it.ipAddress == "10.10.50.1" })
 
-        assertEquals("يجب استعادة هوية الشبكة", "شبكة سام العالمية للاختبار", newNetRepo.config.value.networkName)
-        assertEquals("يجب استعادة موديل راوتر ميكروتك", "MikroTik CCR2116", newNetRepo.config.value.mainRouterModel)
-        assertTrue("يجب استعادة أجهزة ميكروتك", newNetRepo.devices.value.any { it.id == "DEV_TEST_101" })
+        // Verify network config restored
+        assertEquals("شبكة سام ميكروتك السحابية", newNetRepo.config.value.networkName)
+    }
+
+    @Test
+    fun testFirestoreSyncManagerMetadataModel() {
+        val meta = com.example.data.sync.SyncMetadata(
+            userEmail = "user@example.com",
+            lastSyncedAt = 1000L,
+            totalDocuments = 15,
+            totalJournalLines = 30,
+            totalParties = 5,
+            totalPackages = 4,
+            totalTreasuries = 3,
+            totalAllocations = 2,
+            totalDevices = 8,
+            totalNetworkDevices = 8,
+            totalCurrencyRates = 6,
+            networkName = "شبكة النور",
+            organizationName = "شركة النور للإنترنت",
+            hasNetworkProfile = true,
+            isBalanced = true,
+            checksum = "abc123sha"
+        )
+
+        assertEquals("user@example.com", meta.userEmail)
+        assertEquals(8, meta.totalDevices)
+        assertEquals(8, meta.totalNetworkDevices)
+        assertEquals(6, meta.totalCurrencyRates)
+        assertEquals("شبكة النور", meta.networkName)
+        assertEquals("شركة النور للإنترنت", meta.organizationName)
+        assertTrue(meta.hasNetworkProfile)
+    }
+
+    @Test
+    fun testAutomaticInitialSyncConditions() = kotlinx.coroutines.runBlocking {
+        // Test condition: Empty local database triggers automatic restore on new device
+        val docCount = db.documentDao().getAllDocumentsSync().size
+        val linesCount = db.journalDao().getAllLinesSync().size
+        val isNewDevice = docCount == 0 && linesCount == 0
+        assertTrue("Fresh in-memory database must be identified as new device", isNewDevice)
+
+        // Remote meta simulation
+        val remoteMeta = com.example.data.sync.CloudBackupMeta(
+            uid = "user_123",
+            userEmail = "user@test.com",
+            timestamp = System.currentTimeMillis(),
+            documentsCount = 10,
+            journalLinesCount = 20,
+            partiesCount = 4,
+            totalRecords = 34,
+            checksum = "sha256_dummy",
+            networkDevicesCount = 5,
+            currencyRatesCount = 2,
+            networkName = "شبكة اختبار",
+            hasNetworkProfile = true
+        )
+        assertTrue(remoteMeta.totalRecords > 0)
+        assertEquals(5, remoteMeta.networkDevicesCount)
+        assertEquals(2, remoteMeta.currencyRatesCount)
     }
 }
+

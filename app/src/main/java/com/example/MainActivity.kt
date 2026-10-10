@@ -329,7 +329,7 @@ class MainActivity : ComponentActivity() {
                         text = {
                             Column {
                                 Text(
-                                    text = "تم العثور على نسخة احتياطية سحابية سابقة لحسابك (${backup.userEmail}) بتاريخ $dateStr تحتوي على ${backup.documentsCount} مستنداً و ${backup.journalLinesCount} قيداً.",
+                                    text = "تم العثور على نسخة احتياطية سحابية سابقة لحسابك (${backup.userEmail}) بتاريخ $dateStr تحتوي على ${backup.documentsCount} مستنداً و ${backup.journalLinesCount} قيداً و ${backup.networkDevicesCount} جهازاً و ${backup.currencyRatesCount} سعر صرف.",
                                     style = MaterialTheme.typography.bodyMedium
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))

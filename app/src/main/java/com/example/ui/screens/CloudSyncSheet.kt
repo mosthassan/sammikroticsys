@@ -535,10 +535,10 @@ fun CloudSyncSheet(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        SyncMetricItem(title = "أجهزة الشبكة", count = syncMeta?.totalNetworkDevices ?: 0)
+                        SyncMetricItem(title = "أجهزة الشبكة", count = syncMeta?.totalDevices ?: syncMeta?.totalNetworkDevices ?: 0)
                         SyncMetricItem(title = "أسعار الصرف", count = syncMeta?.totalCurrencyRates ?: 0)
-                        SyncMetricItem(title = "الخزائن والصناديق", count = syncMeta?.totalTreasuries ?: 0)
-                        SyncMetricItem(title = "التسويات والربط", count = syncMeta?.totalAllocations ?: 0)
+                        SyncMetricItem(title = "الخزائن", count = syncMeta?.totalTreasuries ?: 0)
+                        SyncMetricItem(title = "هوية الشبكة", count = if (syncMeta?.hasNetworkProfile == true || !syncMeta?.networkName.isNullOrBlank()) 1 else 0)
                     }
                 }
             }

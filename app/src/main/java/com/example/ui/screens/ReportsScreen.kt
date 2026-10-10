@@ -105,7 +105,6 @@ import com.example.core.model.CurrencyCode
 import com.example.core.model.Money
 import com.example.domain.usecase.AgingReport
 import com.example.domain.usecase.BalanceSheetReport
-import com.example.domain.usecase.DualCurrencyTrialBalanceReport
 import com.example.domain.usecase.IncomeStatementReport
 import com.example.ui.components.AmountSemanticType
 import com.example.ui.components.AmountText
@@ -125,7 +124,6 @@ fun ReportsScreen(
     val incomeReport by viewModel.incomeStatement.collectAsState()
     val balanceReport by viewModel.balanceSheet.collectAsState()
     val agingReport by viewModel.agingReport.collectAsState()
-    val dualTbReport by viewModel.dualCurrencyTrialBalance.collectAsState()
 
     val todayEpoch = remember { System.currentTimeMillis() / 86400000L }
 
@@ -138,7 +136,6 @@ fun ReportsScreen(
                 viewModel.loadIncomeStatement(todayEpoch - 30, todayEpoch)
                 viewModel.loadBalanceSheet(todayEpoch)
             }
-            4 -> viewModel.loadDualCurrencyTrialBalance()
         }
     }
 
@@ -164,11 +161,6 @@ fun ReportsScreen(
                     title = "أرباح الشركاء",
                     icon = Icons.Default.Group,
                     accentColor = AssetPurple
-                ),
-                FintechTabItem(
-                    title = "ميزان المراجعة ثنائي العملة (IAS 21)",
-                    icon = Icons.Default.ReceiptLong,
-                    accentColor = BrandCyanPrimary
                 ),
                 FintechTabItem(
                     title = "سحابة Firebase وحساب Google",
@@ -198,10 +190,7 @@ fun ReportsScreen(
                     viewModel.loadAgingReport(todayEpoch)
                 })
                 3 -> PartnerDividendsView(incomeReport, balanceReport, viewModel)
-                4 -> DualCurrencyTrialBalanceView(dualTbReport, viewModel, onRefresh = {
-                    viewModel.loadDualCurrencyTrialBalance()
-                })
-                5 -> CloudSyncAndBackupView(viewModel)
+                4 -> CloudSyncAndBackupView(viewModel)
             }
         }
     }
@@ -368,10 +357,8 @@ private fun IncomeStatementView(
                 }
             }
 
-            // Section 4: FX Gains / Losses (Realized & Unrealized IAS 21)
-            val hasFxGainsLosses = report.realizedFxGainMinor > 0 || report.realizedFxLossMinor > 0 ||
-                    report.unrealizedFxGainMinor > 0 || report.unrealizedFxLossMinor > 0
-            if (hasFxGainsLosses) {
+            // Section 4: FX Gains / Losses (IAS 21 Realized & Unrealized FX)
+            if (report.realizedFxGainMinor > 0 || report.realizedFxLossMinor > 0 || report.unrealizedFxGainMinor > 0 || report.unrealizedFxLossMinor > 0) {
                 item {
                     Card(
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -379,7 +366,7 @@ private fun IncomeStatementView(
                         modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
                     ) {
                         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            SectionHeader(title = "4. فروق أسعار صرف وتقييم العملات (IAS 21 FX)")
+                            SectionHeader(title = "4. فروق أسعار صرف العملات (IAS 21 FX Effects)")
                             if (report.realizedFxGainMinor > 0) {
                                 ReportLineRow("أرباح فروق صرف العملة المحققة (4901)", report.realizedFxGainMinor, isPositive = true)
                             }
@@ -387,11 +374,13 @@ private fun IncomeStatementView(
                                 ReportLineRow("خسائر فروق صرف العملة المحققة (5901)", report.realizedFxLossMinor, isPositive = false)
                             }
                             if (report.unrealizedFxGainMinor > 0) {
-                                ReportLineRow("أرباح إعادة تقييم العملة غير المحققة (4902)", report.unrealizedFxGainMinor, isPositive = true)
+                                ReportLineRow("أرباح تقييم العملة غير المحققة (4902)", report.unrealizedFxGainMinor, isPositive = true)
                             }
                             if (report.unrealizedFxLossMinor > 0) {
-                                ReportLineRow("خسائر إعادة تقييم العملة غير المحققة (5902)", report.unrealizedFxLossMinor, isPositive = false)
+                                ReportLineRow("خسائر تقييم العملة غير المحققة (5902)", report.unrealizedFxLossMinor, isPositive = false)
                             }
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                            ReportSubtotalRow("صافي أثر فروق العملات (Net FX)", report.totalFxNetMinor, isHighlight = true, isPositive = report.totalFxNetMinor >= 0)
                         }
                     }
                 }
@@ -1098,7 +1087,7 @@ private fun CloudSyncAndBackupView(viewModel: AppViewModel) {
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
                                 Text("مركز المزامنة السحابية (Firebase Firestore)", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextPrimaryDark)
-                                Text("مزامنة شاملة لهوية الشبكة، أجهزة ميكروتك، أسعار الصرف، الفواتير، والسندات", fontSize = 11.sp, color = TextSecondaryDark)
+                                Text("مزامنة فورية ودقيقة للسندات، الفواتير، الأطراف، واليومية", fontSize = 11.sp, color = TextSecondaryDark)
                             }
                         }
                     }
@@ -1400,217 +1389,5 @@ private fun ReportSubtotalRow(
             fontSize = if (isHighlight) 16 else 14,
             fontWeight = FontWeight.Bold
         )
-    }
-}
-
-@Composable
-private fun DualCurrencyTrialBalanceView(
-    report: DualCurrencyTrialBalanceReport?,
-    viewModel: AppViewModel,
-    onRefresh: () -> Unit
-) {
-    var isExecutingRevaluation by remember { mutableStateOf(false) }
-    var revaluationMessage by remember { mutableStateOf<String?>(null) }
-    val todayEpoch = remember { System.currentTimeMillis() / 86400000L }
-    val currentYear = remember { java.time.LocalDate.now().year }
-
-    if (report == null) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("جاري استخراج ميزان المراجعة ثنائي العملة (IAS 21)...")
-        }
-        return
-    }
-
-    LazyColumn(
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.fillMaxSize()
-    ) {
-        // IAS 21 Periodic Revaluation Action Banner
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                "إعادة التقييم الدوري للعملات (IAS 21 Periodic Revaluation)",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                "إعادة تقييم البنود النقدية الأجنبية (الخزائن، المدينون، الدائنون) بأسعار الصرف الحالية وتسجيل الفروق غير المحققة (4902 / 5902).",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Button(
-                        onClick = {
-                            isExecutingRevaluation = true
-                            viewModel.executePeriodicRevaluation(
-                                asOfDateEpochDay = todayEpoch,
-                                fiscalYear = currentYear,
-                                memo = "إعادة تقييم دورية لنهاية الفترة IAS 21",
-                                onSuccess = { res ->
-                                    isExecutingRevaluation = false
-                                    if (res.document != null) {
-                                        val gain = Money(res.totalUnrealizedGainMinor, CurrencyCode.FUNCTIONAL).format()
-                                        val loss = Money(res.totalUnrealizedLossMinor, CurrencyCode.FUNCTIONAL).format()
-                                        revaluationMessage = "تم توليد قيد إعادة التقييم #${res.document.docNumber} بنجاح. أرباح: $gain | خسائر: $loss"
-                                    } else {
-                                        revaluationMessage = "تم الفحص: جميع البنود النقدية الأجنبية متطابقة مع أسعار الصرف الحالية."
-                                    }
-                                },
-                                onError = {
-                                    isExecutingRevaluation = false
-                                }
-                            )
-                        },
-                        enabled = !isExecutingRevaluation,
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(if (isExecutingRevaluation) "جاري إعادة التقييم والترحيل..." else "تشغيل إعادة التقييم الدوري الآن (IAS 21 Engine)")
-                    }
-
-                    revaluationMessage?.let { msg ->
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(msg, color = BrandCyanPrimary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
-                    }
-                }
-            }
-        }
-
-        // Balance Status Header
-        item {
-            val statusColor = if (report.isBalanced) SemanticIncomeGreen else SemanticExpenseRed
-            Card(
-                colors = CardDefaults.cardColors(containerColor = statusColor.copy(alpha = 0.15f)),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, statusColor, RoundedCornerShape(12.dp))
-            ) {
-                Row(
-                    modifier = Modifier.padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = if (report.isBalanced) Icons.Default.CheckCircle else Icons.Default.Warning,
-                            contentDescription = null,
-                            tint = statusColor,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(
-                                text = if (report.isBalanced) "الميزان متطابق رياضياً (IFRS)" else "تنبيه: عدم تطابق بين المدين والدائن",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp,
-                                color = statusColor
-                            )
-                            Text(
-                                text = "إجمالي المدين بالريال: ${Money(report.totalBaseDebitMinor, CurrencyCode.FUNCTIONAL).format()} | الدائن: ${Money(report.totalBaseCreditMinor, CurrencyCode.FUNCTIONAL).format()}",
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // Dual-Currency Account Cards
-        items(report.rows) { row ->
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                shape = RoundedCornerShape(10.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(10.dp))
-            ) {
-                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "${row.accountCode} - ${row.accountName}",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp
-                        )
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant
-                        ) {
-                            Text(
-                                text = if (row.isDebitNormal) "طبيعة مدينة" else "طبيعة دائنة",
-                                fontSize = 10.sp,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            "الرصيد بالعملة الوظيفية (YER):",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            Money(row.baseNetMinor, CurrencyCode.FUNCTIONAL).format(),
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp,
-                            fontFamily = FontFamily.Monospace,
-                            color = if (row.baseNetMinor >= 0) SemanticIncomeGreen else SemanticExpenseRed
-                        )
-                    }
-
-                    if (row.originalBalances.isNotEmpty()) {
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
-                        Text(
-                            "الأرصدة بالعملات الأجنبية الأصلية:",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = BrandCyanPrimary
-                        )
-                        row.originalBalances.forEach { (curr, origAmt) ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("• ${curr.arabicName} (${curr.name}):", fontSize = 11.sp)
-                                Text(
-                                    Money(origAmt, curr).format(),
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 11.sp,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 }

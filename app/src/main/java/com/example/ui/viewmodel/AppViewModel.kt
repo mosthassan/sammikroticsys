@@ -50,7 +50,6 @@ import com.example.domain.usecase.AgingReport
 import com.example.domain.usecase.BackupRestoreUseCase
 import com.example.domain.usecase.BalanceSheetReport
 import com.example.domain.usecase.BatchImportUseCase
-import com.example.domain.usecase.DualCurrencyTrialBalanceReport
 import com.example.domain.usecase.FinancialStatementsUseCase
 import com.example.domain.usecase.ImportBatchReport
 import com.example.domain.usecase.IncomeStatementReport
@@ -96,11 +95,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     val statementsUseCase = FinancialStatementsUseCase(db)
     val statementOfAccountUseCase = StatementOfAccountUseCase(db)
-    val backupRestoreUseCase = BackupRestoreUseCase(db, networkRepository)
+    val backupRestoreUseCase = BackupRestoreUseCase(db, deviceDao = networkRepository, networkRepository = networkRepository, context = application)
     val batchImportUseCase = BatchImportUseCase(db, writer)
     val exchangeRateResolver = ExchangeRateResolver(db)
     val partnerEquityUseCase = com.example.domain.usecase.PartnerEquityUseCase(db, writer)
-    val periodicRevaluationUseCase = com.example.domain.usecase.PeriodicRevaluationUseCase(db, exchangeRateResolver)
+    val periodicRevaluationUseCase = com.example.domain.usecase.PeriodicRevaluationUseCase(db, writer, exchangeRateResolver)
 
     // Organization & Exchange Rates
     val organization: StateFlow<OrganizationEntity?> = db.organizationDao().getOrganizationFlow()
@@ -111,9 +110,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     // Auth & Firebase Sync
     val authManager = AuthManager(application)
-    val syncManager = FirestoreSyncManager(application, db, backupRestoreUseCase)
+    val syncManager = FirestoreSyncManager(application, db, backupRestoreUseCase, networkRepository = networkRepository, deviceDao = networkRepository)
     val googleAuthManager = GoogleAuthManager(application)
-    val firebaseSyncManager = FirebaseSyncManager(application, db, syncManager)
+    val firebaseSyncManager = FirebaseSyncManager(application, db)
 
     val currentUser: StateFlow<UserSession?> = authManager.currentUser
     val authError: StateFlow<String?> = authManager.authError
@@ -178,9 +177,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _agingReport = MutableStateFlow<AgingReport?>(null)
     val agingReport: StateFlow<AgingReport?> = _agingReport.asStateFlow()
 
-    private val _dualCurrencyTrialBalance = MutableStateFlow<DualCurrencyTrialBalanceReport?>(null)
-    val dualCurrencyTrialBalance: StateFlow<DualCurrencyTrialBalanceReport?> = _dualCurrencyTrialBalance.asStateFlow()
-
     private val _currentPartyStatement = MutableStateFlow<StatementOfAccountReport?>(null)
     val currentPartyStatement: StateFlow<StatementOfAccountReport?> = _currentPartyStatement.asStateFlow()
 
@@ -197,22 +193,55 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     init {
         refreshDashboard()
         runInvariantCheck()
-        checkForRemoteBackupIfEmpty()
+        val user = currentUser.value
+        if (user != null && user.isSignedIn) {
+            triggerInitialCloudSyncOnLogin(user)
+        } else {
+            checkForRemoteBackupIfEmpty()
+        }
+    }
+
+    fun triggerInitialCloudSyncOnLogin(user: UserSession) {
+        viewModelScope.launch {
+            val safeUid = user.uid.ifBlank { syncManager.sanitizeTenantEmail(user.email) }
+            val docCount = db.documentDao().getAllDocumentsSync().size
+            val linesCount = db.journalDao().getAllLinesSync().size
+            val isNewDeviceOrEmpty = docCount == 0 && linesCount == 0
+
+            val remoteMeta = syncManager.checkRemoteBackup(safeUid, user.email)
+            if (remoteMeta != null && remoteMeta.totalRecords > 0) {
+                if (isNewDeviceOrEmpty) {
+                    _userMessage.emit("تم اكتشاف نسخة سحابية سابقة (${remoteMeta.totalRecords} سجلاً). جاري الاستعادة التلقائية...")
+                    val pullRes = syncManager.syncPull(safeUid, user.email)
+                    if (pullRes.isSuccess) {
+                        _userMessage.emit("تمت استعادة كافة البيانات السحابية تلقائياً بنجاح ومطابقتها محلياً 100%")
+                        refreshDashboard()
+                        runInvariantCheck()
+                    } else {
+                        pendingCloudRestorePrompt.value = remoteMeta
+                        _userMessage.emit("تنبيه: تعذرت الاستعادة التلقائية: ${pullRes.exceptionOrNull()?.localizedMessage}")
+                    }
+                } else {
+                    val lastLocalSync = syncManager.syncMetadata.value?.lastSyncedAt ?: 0L
+                    if (remoteMeta.timestamp > lastLocalSync && autoSyncEnabled.value) {
+                        _userMessage.emit("جاري مزامنة السجلات السحابية المحدثة...")
+                        val pullRes = syncManager.syncPull(safeUid, user.email)
+                        if (pullRes.isSuccess) {
+                            refreshDashboard()
+                            runInvariantCheck()
+                        }
+                    }
+                }
+            } else if (!isNewDeviceOrEmpty && docCount > 0 && autoSyncEnabled.value) {
+                syncManager.syncPush(safeUid, user.email)
+            }
+        }
     }
 
     fun checkForRemoteBackupIfEmpty() {
-        viewModelScope.launch {
-            val user = currentUser.value
-            if (user != null && user.isSignedIn) {
-                val docCount = db.documentDao().getAllDocumentsSync().size
-                val linesCount = db.journalDao().getAllLinesSync().size
-                if (docCount == 0 && linesCount == 0) {
-                    val meta = syncManager.checkRemoteBackup(user.uid, user.email)
-                    if (meta != null && meta.totalRecords > 0) {
-                        pendingCloudRestorePrompt.value = meta
-                    }
-                }
-            }
+        val user = currentUser.value
+        if (user != null && user.isSignedIn) {
+            triggerInitialCloudSyncOnLogin(user)
         }
     }
 
@@ -423,6 +452,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         exchangeRate: ExchangeRate,
         allocations: List<InvoiceAllocationSpec>,
         notes: String,
+        rateZone: RateZone = RateZone.DEFAULT,
+        rateSource: com.example.core.model.RateSource = com.example.core.model.RateSource.SYSTEM_DAILY,
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
@@ -439,7 +470,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     currency = currency,
                     exchangeRate = exchangeRate,
                     allocations = allocations,
-                    notes = notes
+                    notes = notes,
+                    rateZone = rateZone,
+                    rateSource = rateSource
                 )
                 _userMessage.emit("تم ترحيل سند القبض وتخصيصه بنجاح")
                 refreshDashboard()
@@ -460,6 +493,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         customExpenseCode: String? = null,
         invoiceAllocations: List<InvoiceAllocationSpec> = emptyList(),
         notes: String,
+        rateZone: RateZone = RateZone.DEFAULT,
+        rateSource: com.example.core.model.RateSource = com.example.core.model.RateSource.SYSTEM_DAILY,
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
@@ -478,7 +513,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     paymentType = paymentType,
                     customExpenseCode = customExpenseCode,
                     invoiceAllocations = invoiceAllocations,
-                    notes = notes
+                    notes = notes,
+                    rateZone = rateZone,
+                    rateSource = rateSource
                 )
                 _userMessage.emit("تم ترحيل سند الصرف بنجاح")
                 refreshDashboard()
@@ -605,12 +642,35 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         return db.documentDao().getDocumentsByPartyFlow(partyId)
     }
 
+    fun runPeriodicRevaluation(
+        fiscalYear: Int = getLocalNow().year,
+        dateEpochDay: Long = getLocalNow().toEpochDay(),
+        rateZone: RateZone = RateZone.SANAA,
+        notes: String? = null
+    ) {
+        viewModelScope.launch {
+            try {
+                val docs = periodicRevaluationUseCase.executePeriodicRevaluationRun(
+                    fiscalYear = fiscalYear,
+                    dateEpochDay = dateEpochDay,
+                    rateZone = rateZone,
+                    notes = notes
+                )
+                _userMessage.emit("تم تنفيذ إعادة التقييم الدوري بنجاح (${docs.size} قيد تم ترحيله)")
+                refreshDashboard()
+            } catch (e: Exception) {
+                _userMessage.emit("فشل إعادة التقييم الدوري: ${e.message}")
+            }
+        }
+    }
+
     fun postPurchaseInvoice(
         vendorPartyId: String,
         currency: CurrencyCode,
         exchangeRate: ExchangeRate,
         items: List<PurchaseItemSpec>,
         notes: String,
+        rateZone: RateZone = RateZone.DEFAULT,
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
@@ -625,7 +685,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     currency = currency,
                     exchangeRate = exchangeRate,
                     items = items,
-                    notes = notes
+                    notes = notes,
+                    rateZone = rateZone
                 )
                 _userMessage.emit("تم ترحيل فاتورة المشتريات وتسجيل الأصول إن وُجدت")
                 refreshDashboard()
@@ -1010,46 +1071,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun loadDualCurrencyTrialBalance() {
-        viewModelScope.launch {
-            val rep = statementsUseCase.generateDualCurrencyTrialBalance()
-            _dualCurrencyTrialBalance.value = rep
-        }
-    }
-
-    fun executePeriodicRevaluation(
-        asOfDateEpochDay: Long,
-        fiscalYear: Int,
-        rateZone: RateZone = RateZone.DEFAULT,
-        memo: String = "",
-        onSuccess: (com.example.domain.usecase.RevaluationResult) -> Unit = {},
-        onError: (Throwable) -> Unit = {}
-    ) {
-        viewModelScope.launch {
-            try {
-                val result = periodicRevaluationUseCase.executeRevaluation(
-                    asOfDateEpochDay = asOfDateEpochDay,
-                    fiscalYear = fiscalYear,
-                    rateZone = rateZone,
-                    memo = memo
-                )
-                if (result.document != null) {
-                    _userMessage.emit("تم ترحيل قيد إعادة التقييم الدوري بنجاح بمستند رقم #${result.document.docNumber}")
-                } else {
-                    _userMessage.emit("لا توجد بنود نقدية أجنبية تتطلب إعادة تقييم في هذا التاريخ")
-                }
-                refreshDashboard()
-                loadIncomeStatement(null, asOfDateEpochDay)
-                loadBalanceSheet(asOfDateEpochDay)
-                loadDualCurrencyTrialBalance()
-                onSuccess(result)
-            } catch (e: Throwable) {
-                _userMessage.emit("تعذر تنفيذ إعادة التقييم: ${e.message}")
-                onError(e)
-            }
-        }
-    }
-
     fun insertParty(party: PartyEntity, onSuccess: () -> Unit) {
         viewModelScope.launch {
             try {
@@ -1058,6 +1079,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 onSuccess()
             } catch (e: Exception) {
                 _userMessage.emit("فشل إضافة الطرف: ${e.message}")
+            }
+        }
+    }
+
+    fun updateParty(party: PartyEntity, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                repository.updateParty(party)
+                _userMessage.emit("تم تحديث بيانات الطرف بنجاح")
+                onSuccess()
+            } catch (e: Exception) {
+                _userMessage.emit("فشل تحديث بيانات الطرف: ${e.message}")
             }
         }
     }
@@ -1211,8 +1244,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _userMessage.emit("تم تسجيل الدخول بنجاح بحساب Google: ${user?.email}")
                 if (user != null) {
                     googleAuthManager.signInDirectWithEmail(user.email, user.displayName)
+                    triggerInitialCloudSyncOnLogin(user)
                 }
-                checkForRemoteBackupIfEmpty()
             } else {
                 val err = res.exceptionOrNull()?.localizedMessage ?: "فشل تسجيل الدخول"
                 _userMessage.emit(err)
@@ -1243,7 +1276,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     )
                     authManager.saveSessionDirectly(session)
                     googleAuthManager.signInDirectWithEmail(email, displayName)
-                    checkForRemoteBackupIfEmpty()
+                    triggerInitialCloudSyncOnLogin(session)
                     _userMessage.emit("تم تسجيل الدخول بنجاح بحساب Google: $email")
                 } else {
                     _userMessage.emit("تعذر الحصول على رمز Google ID Token")
@@ -1270,7 +1303,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         googleAuthManager.signInDirectWithEmail(email, displayName)
         viewModelScope.launch {
             _userMessage.emit("تم تفعيل الحساب: ${user.email}")
-            checkForRemoteBackupIfEmpty()
+            triggerInitialCloudSyncOnLogin(user)
         }
     }
 
@@ -1329,6 +1362,106 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         restoreFromCloud()
     }
 
+    fun pushNetworkDevices() {
+        val user = currentUser.value
+        val uid = user?.uid ?: ""
+        val email = user?.email ?: ""
+        if (uid.isBlank() && email.isBlank()) {
+            viewModelScope.launch { _userMessage.emit("يرجى تسجيل الدخول أولاً") }
+            return
+        }
+        viewModelScope.launch {
+            val res = syncManager.pushNetworkDevices(uid, email)
+            if (res.isSuccess) {
+                _userMessage.emit("تم رفع ${res.getOrNull()} جهاز شبكة إلى السحابة بنجاح")
+            } else {
+                _userMessage.emit("فشل رفع أجهزة الشبكة: ${res.exceptionOrNull()?.localizedMessage}")
+            }
+        }
+    }
+
+    fun pullNetworkDevices() {
+        val user = currentUser.value
+        val uid = user?.uid ?: ""
+        val email = user?.email ?: ""
+        if (uid.isBlank() && email.isBlank()) {
+            viewModelScope.launch { _userMessage.emit("يرجى تسجيل الدخول أولاً") }
+            return
+        }
+        viewModelScope.launch {
+            val res = syncManager.pullNetworkDevices(uid, email)
+            if (res.isSuccess) {
+                _userMessage.emit("تمت استعادة ${res.getOrNull()} جهاز شبكة من السحابة بنجاح")
+            } else {
+                _userMessage.emit("فشل استعادة أجهزة الشبكة: ${res.exceptionOrNull()?.localizedMessage}")
+            }
+        }
+    }
+
+    fun pushExchangeRates() {
+        val user = currentUser.value
+        val uid = user?.uid ?: ""
+        val email = user?.email ?: ""
+        if (uid.isBlank() && email.isBlank()) {
+            viewModelScope.launch { _userMessage.emit("يرجى تسجيل الدخول أولاً") }
+            return
+        }
+        viewModelScope.launch {
+            val res = syncManager.pushExchangeRates(uid, email)
+            if (res.isSuccess) {
+                _userMessage.emit("تم رفع ${res.getOrNull()} سعر صرف إلى السحابة بنجاح")
+            } else {
+                _userMessage.emit("فشل رفع أسعار الصرف: ${res.exceptionOrNull()?.localizedMessage}")
+            }
+        }
+    }
+
+    fun pullExchangeRates() {
+        val user = currentUser.value
+        val uid = user?.uid ?: ""
+        val email = user?.email ?: ""
+        if (uid.isBlank() && email.isBlank()) {
+            viewModelScope.launch { _userMessage.emit("يرجى تسجيل الدخول أولاً") }
+            return
+        }
+        viewModelScope.launch {
+            val res = syncManager.pullExchangeRates(uid, email)
+            if (res.isSuccess) {
+                _userMessage.emit("تمت استعادة ${res.getOrNull()} سعر صرف من السحابة بنجاح")
+            } else {
+                _userMessage.emit("فشل استعادة أسعار الصرف: ${res.exceptionOrNull()?.localizedMessage}")
+            }
+        }
+    }
+
+    fun pushNetworkIdentity() {
+        val user = currentUser.value
+        val uid = user?.uid ?: ""
+        val email = user?.email ?: ""
+        if (uid.isBlank() && email.isBlank()) {
+            viewModelScope.launch { _userMessage.emit("يرجى تسجيل الدخول أولاً") }
+            return
+        }
+        viewModelScope.launch {
+            val res = syncManager.pushNetworkIdentityAndConfig(uid, email)
+            _userMessage.emit(res.getOrNull() ?: "فشل رفع هوية الشبكة")
+        }
+    }
+
+    fun pullNetworkIdentity() {
+        val user = currentUser.value
+        val uid = user?.uid ?: ""
+        val email = user?.email ?: ""
+        if (uid.isBlank() && email.isBlank()) {
+            viewModelScope.launch { _userMessage.emit("يرجى تسجيل الدخول أولاً") }
+            return
+        }
+        viewModelScope.launch {
+            val res = syncManager.pullNetworkIdentityAndConfig(uid, email)
+            _userMessage.emit(res.getOrNull() ?: "فشل استعادة هوية الشبكة")
+        }
+    }
+
     fun setAutoSync(enabled: Boolean) {
         firebaseSyncManager.setAutoSync(enabled)
     }
@@ -1339,10 +1472,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             if (res.isSuccess) {
                 val profile = res.getOrNull()
                 if (profile != null) {
-                    authManager.signInDirectly(profile.email, profile.displayName)
+                    val user = authManager.signInDirectly(profile.email, profile.displayName)
+                    _userMessage.emit("تم تسجيل الدخول بنجاح بحساب Google: ${profile.email}")
+                    triggerInitialCloudSyncOnLogin(user)
                 }
-                _userMessage.emit("تم تسجيل الدخول بنجاح بحساب Google: ${profile?.email}")
-                checkForRemoteBackupIfEmpty()
             } else {
                 val err = res.exceptionOrNull()?.localizedMessage ?: "فشل تسجيل الدخول عبر Google"
                 _userMessage.emit(err)

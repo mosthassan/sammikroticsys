@@ -8,22 +8,23 @@ import com.example.core.ledger.DocumentType
 import com.example.core.model.CurrencyCode
 import com.example.core.model.ExchangeRate
 import com.example.core.model.Money
+import com.example.core.model.RateSource
 import com.example.core.model.RateZone
 import com.example.data.ledger.LedgerInvariants
 import com.example.data.ledger.LedgerWriter
+import com.example.data.ledger.PurchaseItemSpec
 import com.example.data.local.AppDatabase
 import com.example.data.local.entity.CurrencyRateEntity
 import com.example.data.local.entity.FiscalPeriodEntity
 import com.example.data.local.entity.PartyEntity
-import com.example.data.local.entity.TreasuryAccountEntity
 import com.example.domain.usecase.ExchangeRateResolver
 import com.example.domain.usecase.FinancialStatementsUseCase
 import com.example.domain.usecase.PeriodicRevaluationUseCase
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -37,26 +38,35 @@ import java.time.LocalDate
  * Test suite for Multi-Currency Part D: Period-End Revaluation & Dual-Currency Reporting.
  * Covers Tests 31 through 40 from Section 4:
  *
- * 31. IAS 21 Monetary Items Scope (D.1):
- *     Foreign Treasury Accounts (1101/1102) and Foreign Receivables/Payables (1201/2101) are evaluated.
- * 32. IAS 21 Non-Monetary Strict Invariant (D.1):
- *     Fixed Assets (1501), Inventory (1401), and Partner Capital (3101) MUST NEVER be revalued.
- * 33. Unrealized FX Gain on Foreign Treasury (D.1):
- *     Dr Treasury (1101), Cr Unrealized FX Gain (4902) when foreign currency appreciates against YER.
- * 34. Unrealized FX Loss on Foreign Treasury (D.1):
- *     Dr Unrealized FX Loss (5902), Cr Treasury (1101) when foreign currency depreciates against YER.
- * 35. Unrealized FX Gain on Foreign Accounts Receivable (D.1):
- *     Customer receivable in USD revalued higher: Dr 1201, Cr 4902.
- * 36. Unrealized FX Loss on Foreign Accounts Payable (D.1):
- *     Vendor debt in USD revalued higher (costs more YER): Dr 5902, Cr 2101.
- * 37. Periodic Revaluation Document Type (D.1):
- *     Revaluation posted as PERIODIC_REVALUATION (REV) and satisfies all double-entry ledger invariants.
- * 38. Revaluation Idempotency & Zero Delta Handling (D.1):
- *     Running revaluation when book rate == current rate results in zero delta and generates no redundant entry.
- * 39. Dual-Currency Trial Balance Reporting (D.2):
- *     Trial Balance displays balances in base YER alongside original currency amounts with total equilibrium.
- * 40. Profit & Loss Statement Realized vs Unrealized FX Reporting (D.2):
- *     Income Statement reports Realized FX (4901/5901) and Unrealized FX (4902/5902) clearly and net profit aligns.
+ * 31. Foreign Treasury Account Revaluation - Unrealized FX Gain (D.1):
+ *     USD Treasury book YER balance adjusts upward on exchange rate appreciation,
+ *     crediting Unrealized FX Gain 4902 while USD cash balance remains constant.
+ * 32. Foreign Treasury Account Revaluation - Unrealized FX Loss (D.1):
+ *     USD Treasury book YER balance adjusts downward on exchange rate depreciation,
+ *     debiting Unrealized FX Loss 5902 while USD cash balance remains constant.
+ * 33. Foreign Accounts Receivable Revaluation (Asset Monetary Item 1201) (D.1):
+ *     Customer foreign currency receivables revalued to current closing rate with partyId
+ *     maintaining full subledger control reconciliation (Invariant INV-002).
+ * 34. Foreign Accounts Payable Revaluation (Liability Monetary Item 2101) (D.1):
+ *     Vendor foreign currency payables revalued to current closing rate with partyId;
+ *     exchange rate increase produces liability increase and debit to 5902.
+ * 35. Strict Non-Monetary Item Invariant Enforcement (D.1):
+ *     Non-monetary items (Fixed Assets 1501, Inventory 1401, Partner Capital 3101)
+ *     MUST NEVER be revalued under IAS 21; engine strictly rejects revaluation.
+ * 36. Zero-Delta Exemption / Unchanged Exchange Rates (D.1):
+ *     When closing market rate equals existing book rate, zero delta is detected
+ *     and no empty or zero-amount journal lines are posted.
+ * 37. Periodic Revaluation Document Type (PERIODIC_REVALUATION / REV) & Numbering (D.1):
+ *     Revaluation creates a document with type PERIODIC_REVALUATION (code prefix REV)
+ *     and atomic sequential numbering.
+ * 38. Dual-Currency Trial Balance & Ledger Reporting (D.2):
+ *     Trial Balance displays original foreign currency balance alongside base currency YER.
+ * 39. Dual FX Disclosure in Profit & Loss Statement (IAS 21) (D.2):
+ *     Income Statement reports Realized FX (4901/5901) and Unrealized FX (4902/5902)
+ *     separately, factoring both into Net Profit.
+ * 40. Dual-Currency Balance Sheet Equilibrium & Revaluation Voiding / Reversal (D.1 / D.2):
+ *     Balance Sheet stays in perfect equilibrium. Voiding a revaluation creates a clean
+ *     reversal entry, restores previous book balance, and satisfies all ledger invariants.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
@@ -70,27 +80,27 @@ class ForeignRevaluationPartDTest {
     private lateinit var statementsUseCase: FinancialStatementsUseCase
 
     @Before
-    fun setup() {
+    fun setUp() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         db = AppDatabase.createInMemory(context)
+        AppDatabase.installTriggers(db.openHelper.writableDatabase)
+        AppDatabase.seedDefaultData(db.openHelper.writableDatabase)
+
         writer = LedgerWriter(db, enableInvariantValidation = true)
         invariants = LedgerInvariants(db)
         resolver = ExchangeRateResolver(db)
-        revaluationUseCase = PeriodicRevaluationUseCase(db, resolver)
+        revaluationUseCase = PeriodicRevaluationUseCase(db, writer, resolver)
         statementsUseCase = FinancialStatementsUseCase(db)
 
         runBlocking {
-            // Seed 2026 Fiscal Periods
-            for (m in 1..12) {
-                db.fiscalPeriodDao().insertPeriod(
-                    FiscalPeriodEntity(
-                        id = "FP_2026_${m.toString().padStart(2, '0')}",
-                        year = 2026,
-                        month = m,
-                        isClosed = false
-                    )
+            db.fiscalPeriodDao().insertPeriod(
+                FiscalPeriodEntity(
+                    id = "FP_2026_10",
+                    year = 2026,
+                    month = 10,
+                    isClosed = false
                 )
-            }
+            )
         }
     }
 
@@ -100,471 +110,672 @@ class ForeignRevaluationPartDTest {
     }
 
     /**
-     * Test 31: IAS 21 Monetary Items Scope (D.1)
-     * Revaluation engine scopes strictly to monetary items: Foreign Treasury (1101/1102)
-     * and Foreign Receivables/Payables (1201/2101).
+     * Test 31: Foreign Treasury Account Revaluation - Unrealized FX Gain (D.1)
+     * - Deposit 1,000 USD into TR_USD_VAULT at rate 530 YER = 530,000 YER base (53,000,000 minor).
+     * - Rate jumps to 600 YER (600,000,000 micros).
+     * - Expected Market Value = 1,000 * 600 = 600,000 YER.
+     * - Delta = 600,000 - 530,000 = +70,000 YER (+7,000,000 minor).
+     * - Auto-generated Journal Entry:
+     *   DR TR_USD_VAULT (70,000 YER base, orig = 0),
+     *   CR 4902 Unrealized FX Gain (70,000 YER base).
+     * - Treasury book YER balance becomes 600,000 YER; physical USD balance remains 1,000 USD.
      */
     @Test
-    fun test31_ias21MonetaryItemsScope() {
+    fun test31_foreignTreasuryRevaluationUnrealizedFxGain() {
         runBlocking {
-            assertTrue(revaluationUseCase.eligibleMonetaryAccounts.contains(AccountConstants.CASH_VAULT))
-            assertTrue(revaluationUseCase.eligibleMonetaryAccounts.contains(AccountConstants.BANKS_WALLETS))
-            assertTrue(revaluationUseCase.eligibleMonetaryAccounts.contains(AccountConstants.ACCOUNTS_RECEIVABLE))
-            assertTrue(revaluationUseCase.eligibleMonetaryAccounts.contains(AccountConstants.ACCOUNTS_PAYABLE))
+            val partnerId = "PARTNER_D31"
+            db.partyDao().insertParty(PartyEntity(id = partnerId, name = "شريك تمويل د31", isPartner = true))
 
-            // Ensure base YER cash accounts are not flagged as foreign revaluation candidates
-            val asOfDate = LocalDate.of(2026, 10, 10).toEpochDay()
-            val candidates = revaluationUseCase.evaluateCandidates(asOfDate)
-            for (candidate in candidates) {
-                assertTrue("Candidate currency must be foreign", candidate.currency != CurrencyCode.FUNCTIONAL)
-                assertTrue("Account must be in monetary set", candidate.accountCode in revaluationUseCase.eligibleMonetaryAccounts)
-            }
-        }
-    }
+            val usdAmountMinor = 1_000_00L // 1,000.00 USD
+            val initialRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 530_000_000L)
+            val dateEpoch = LocalDate.of(2026, 10, 5).toEpochDay()
 
-    /**
-     * Test 32: IAS 21 Non-Monetary Strict Invariant (D.1)
-     * Non-monetary items (Fixed Assets 1501, Inventory 1401, Partner Capital 3101, Retained Earnings 3301)
-     * MUST NEVER be revalued.
-     */
-    @Test
-    fun test32_ias21NonMonetaryStrictInvariant() {
-        runBlocking {
-            val forbidden = revaluationUseCase.forbiddenNonMonetaryAccounts
-            assertTrue(forbidden.contains(AccountConstants.CAPITAL))
-            assertTrue(forbidden.contains(AccountConstants.CARD_INVENTORY_RESERVE))
-            assertTrue(forbidden.contains(AccountConstants.FIXED_ASSETS_NETWORK))
-            assertTrue(forbidden.contains(AccountConstants.ACCUMULATED_DEPRECIATION))
-            assertTrue(forbidden.contains(AccountConstants.RETAINED_EARNINGS))
-
-            // Even if foreign currency partner capital exists, it must never appear as a candidate
-            val partnerId = "PARTNER_NON_MONETARY_TEST"
-            db.partyDao().insertParty(PartyEntity(partnerId, "شريك مساهم", isPartner = true))
+            // Seed 1,000 USD into TR_USD_VAULT
             writer.postCapitalReceipt(
                 targetAccountCode = AccountConstants.CAPITAL,
                 partnerPartyId = partnerId,
                 treasuryId = "TR_USD_VAULT",
                 fiscalYear = 2026,
-                dateEpochDay = LocalDate.of(2026, 10, 1).toEpochDay(),
-                amountOrigMinor = 5_000_00L,
+                dateEpochDay = dateEpoch,
+                amountOrigMinor = usdAmountMinor,
                 currency = CurrencyCode.USD,
-                exchangeRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 530_000_000L),
-                notes = "رأس مال بالدولار"
+                exchangeRate = initialRate,
+                notes = "إيداع أولي بالدولار"
             )
 
-            // Market rate spike to 600 YER
-            val asOfDate = LocalDate.of(2026, 10, 10).toEpochDay()
-            db.currencyRateDao().insertRate(
-                CurrencyRateEntity(
-                    id = "RATE_USD_SPIKE_32",
-                    currency = "USD",
-                    zone = RateZone.DEFAULT.name,
-                    rateMicros = 600_000_000L,
-                    effectiveDateEpochDay = asOfDate,
-                    createdBy = "TEST",
-                    reason = "Market rate jump"
-                )
-            )
+            val usdCashBefore = db.journalDao().getNetOrigBalanceForTreasury("TR_USD_VAULT")
+            val yerBookBefore = db.journalDao().getNetDebitBalanceForTreasury("TR_USD_VAULT")
+            assertEquals(1_000_00L, usdCashBefore)
+            assertEquals(530_000_00L, yerBookBefore)
 
-            val candidates = revaluationUseCase.evaluateCandidates(asOfDate)
-            val capitalCandidate = candidates.find { it.accountCode == AccountConstants.CAPITAL }
-            assertEquals("IAS 21 Strict Invariant: Partner Capital 3101 must NEVER be evaluated for revaluation", null, capitalCandidate)
-        }
-    }
+            // Market rate appreciates to 600 YER
+            val appreciatedRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 600_000_000L)
+            val revalDate = LocalDate.of(2026, 10, 31).toEpochDay()
 
-    /**
-     * Test 33: Unrealized FX Gain on Foreign Treasury (D.1)
-     * When foreign currency in treasury appreciates (e.g. USD from 530 to 550 YER):
-     * Generates: Dr Treasury (1101) for delta, Cr Unrealized FX Gain (4902).
-     */
-    @Test
-    fun test33_unrealizedFxGainOnForeignTreasury() {
-        runBlocking {
-            val dateInit = LocalDate.of(2026, 10, 1).toEpochDay()
-            val initialRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 530_000_000L) // 530 YER
-
-            // Receive $1,000 into USD Vault: Book Value = 530,000 YER
-            writer.postCapitalReceipt(
-                targetAccountCode = AccountConstants.CAPITAL,
-                partnerPartyId = AppDatabase.WALK_IN_CASH_PARTY_ID,
+            val doc = revaluationUseCase.revalueMonetaryItem(
+                accountCode = AccountConstants.CASH_VAULT,
                 treasuryId = "TR_USD_VAULT",
                 fiscalYear = 2026,
-                dateEpochDay = dateInit,
-                amountOrigMinor = 1_000_00L,
-                currency = CurrencyCode.USD,
-                exchangeRate = initialRate,
-                notes = "إيداع أولي 1000 دولار"
+                dateEpochDay = revalDate,
+                foreignCurrency = CurrencyCode.USD,
+                exchangeRate = appreciatedRate,
+                notes = "إعادة تقييم نهاية الفترة - أرباح غير محققة"
             )
 
-            // Rate rises to 550 YER on Oct 10: New Market Value = 550,000 YER, Delta = +20,000 YER (Gain)
-            val asOfDate = LocalDate.of(2026, 10, 10).toEpochDay()
-            db.currencyRateDao().insertRate(
-                CurrencyRateEntity(
-                    id = "RATE_USD_550_TEST33",
-                    currency = "USD",
-                    zone = RateZone.DEFAULT.name,
-                    rateMicros = 550_000_000L,
-                    effectiveDateEpochDay = asOfDate,
-                    createdBy = "TEST",
-                    reason = "USD Appreciation"
-                )
-            )
+            assertNotNull(doc)
+            assertEquals(DocumentType.PERIODIC_REVALUATION.name, doc!!.type)
+            assertEquals(DocumentStatus.POSTED.name, doc.status)
+            assertEquals(70_000_00L, doc.totalBaseMinor)
 
-            val result = revaluationUseCase.executeRevaluation(
-                asOfDateEpochDay = asOfDate,
-                fiscalYear = 2026,
-                memo = "إعادة تقييم نهاية الفترة - أرباح غير محققة"
-            )
+            // Verify journal entries
+            val entries = db.journalDao().getEntriesForDocument(doc.id)
+            assertEquals(1, entries.size)
+            val lines = db.journalDao().getLinesForEntry(entries[0].id)
+            assertEquals(2, lines.size)
 
-            assertNotNull("Revaluation document must be generated", result.document)
-            assertEquals(DocumentType.PERIODIC_REVALUATION.name, result.document!!.type)
-            assertEquals(20_000_00L, result.totalUnrealizedGainMinor)
-            assertEquals(0L, result.totalUnrealizedLossMinor)
+            val drLine = lines.first { it.baseDebitMinor > 0 }
+            val crLine = lines.first { it.baseCreditMinor > 0 }
 
-            // Assert Treasury 1101 increased by 20,000 YER
-            val treasuryNetBase = db.journalDao().getNetDebitBalanceForTreasury("TR_USD_VAULT")
-            assertEquals(550_000_00L, treasuryNetBase)
+            assertEquals(AccountConstants.CASH_VAULT, drLine.accountCode)
+            assertEquals("TR_USD_VAULT", drLine.treasuryId)
+            assertEquals(0L, drLine.origMinor) // USD physical quantity untouched
+            assertEquals(70_000_00L, drLine.baseDebitMinor)
 
-            // Assert Unrealized FX Gain account 4902 credited by 20,000 YER
-            val gainBalance = -db.journalDao().getNetDebitBalanceForAccount(AccountConstants.UNREALIZED_FX_GAIN)
-            assertEquals(20_000_00L, gainBalance)
+            assertEquals(AccountConstants.UNREALIZED_FX_GAIN, crLine.accountCode)
+            assertEquals(70_000_00L, crLine.baseCreditMinor)
+
+            // Verify new balances
+            val usdCashAfter = db.journalDao().getNetOrigBalanceForTreasury("TR_USD_VAULT")
+            val yerBookAfter = db.journalDao().getNetDebitBalanceForTreasury("TR_USD_VAULT")
+            assertEquals("Physical USD quantity must remain frozen at 1,000 USD", 1_000_00L, usdCashAfter)
+            assertEquals("Book YER value must adjust to 600,000 YER", 600_000_00L, yerBookAfter)
 
             invariants.verifyAll()
         }
     }
 
     /**
-     * Test 34: Unrealized FX Loss on Foreign Treasury (D.1)
-     * When foreign currency in treasury depreciates (e.g. SAR drops from 140 to 135 YER):
-     * Generates: Dr Unrealized FX Loss (5902), Cr Treasury (1101).
+     * Test 32: Foreign Treasury Account Revaluation - Unrealized FX Loss (D.1)
+     * - Deposit 1,000 USD at initial rate 600 YER = 600,000 YER base (60,000,000 minor).
+     * - Rate drops to 530 YER (530,000,000 micros).
+     * - Expected Market Value = 530,000 YER.
+     * - Delta = 530,000 - 600,000 = -70,000 YER (Unrealized FX Loss).
+     * - Auto-generated Journal Entry:
+     *   DR 5902 Unrealized FX Loss (70,000 YER base),
+     *   CR TR_USD_VAULT (70,000 YER base, orig = 0).
+     * - Treasury book YER balance becomes 530,000 YER; physical USD balance remains 1,000 USD.
      */
     @Test
-    fun test34_unrealizedFxLossOnForeignTreasury() {
+    fun test32_foreignTreasuryRevaluationUnrealizedFxLoss() {
         runBlocking {
-            val dateInit = LocalDate.of(2026, 10, 1).toEpochDay()
-            val initialRate = ExchangeRate(CurrencyCode.SAR, CurrencyCode.FUNCTIONAL, 140_000_000L) // 140 YER
+            val partnerId = "PARTNER_D32"
+            db.partyDao().insertParty(PartyEntity(id = partnerId, name = "شريك تمويل د32", isPartner = true))
 
-            // Receive 10,000 SAR into SAR Vault: Book Value = 1,400,000 YER
+            val usdAmountMinor = 1_000_00L
+            val highRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 600_000_000L)
+            val dateEpoch = LocalDate.of(2026, 10, 5).toEpochDay()
+
             writer.postCapitalReceipt(
                 targetAccountCode = AccountConstants.CAPITAL,
-                partnerPartyId = AppDatabase.WALK_IN_CASH_PARTY_ID,
-                treasuryId = "TR_SAR_VAULT",
+                partnerPartyId = partnerId,
+                treasuryId = "TR_USD_VAULT",
                 fiscalYear = 2026,
-                dateEpochDay = dateInit,
-                amountOrigMinor = 10_000_00L,
-                currency = CurrencyCode.SAR,
-                exchangeRate = initialRate,
-                notes = "إيداع 10000 ريال سعودي"
+                dateEpochDay = dateEpoch,
+                amountOrigMinor = usdAmountMinor,
+                currency = CurrencyCode.USD,
+                exchangeRate = highRate,
+                notes = "إيداع أولي بسعر مرتفع"
             )
 
-            // SAR drops to 135 YER on Oct 10: New Value = 1,350,000 YER, Delta = -50,000 YER (Loss)
-            val asOfDate = LocalDate.of(2026, 10, 10).toEpochDay()
-            db.currencyRateDao().insertRate(
-                CurrencyRateEntity(
-                    id = "RATE_SAR_135_TEST34",
-                    currency = "SAR",
-                    zone = RateZone.DEFAULT.name,
-                    rateMicros = 135_000_000L,
-                    effectiveDateEpochDay = asOfDate,
-                    createdBy = "TEST",
-                    reason = "SAR Drop"
-                )
-            )
+            // Market rate drops to 530 YER
+            val droppedRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 530_000_000L)
+            val revalDate = LocalDate.of(2026, 10, 31).toEpochDay()
 
-            val result = revaluationUseCase.executeRevaluation(
-                asOfDateEpochDay = asOfDate,
+            val doc = revaluationUseCase.revalueMonetaryItem(
+                accountCode = AccountConstants.CASH_VAULT,
+                treasuryId = "TR_USD_VAULT",
                 fiscalYear = 2026,
-                memo = "إعادة تقييم نهاية الفترة - خسائر غير محققة"
+                dateEpochDay = revalDate,
+                foreignCurrency = CurrencyCode.USD,
+                exchangeRate = droppedRate,
+                notes = "إعادة تقييم نهاية الفترة - خسائر غير محققة"
             )
 
-            assertNotNull(result.document)
-            assertEquals(0L, result.totalUnrealizedGainMinor)
-            assertEquals(50_000_00L, result.totalUnrealizedLossMinor)
+            assertNotNull(doc)
+            assertEquals(DocumentType.PERIODIC_REVALUATION.name, doc!!.type)
+            assertEquals(70_000_00L, doc.totalBaseMinor)
 
-            // Treasury base value reduced by 50,000 YER
-            val treasuryNetBase = db.journalDao().getNetDebitBalanceForTreasury("TR_SAR_VAULT")
-            assertEquals(1_350_000_00L, treasuryNetBase)
+            val entries = db.journalDao().getEntriesForDocument(doc.id)
+            val lines = db.journalDao().getLinesForEntry(entries[0].id)
+            val drLine = lines.first { it.baseDebitMinor > 0 }
+            val crLine = lines.first { it.baseCreditMinor > 0 }
 
-            // Unrealized FX Loss account 5902 debited by 50,000 YER
-            val lossBalance = db.journalDao().getNetDebitBalanceForAccount(AccountConstants.UNREALIZED_FX_LOSS)
-            assertEquals(50_000_00L, lossBalance)
+            assertEquals(AccountConstants.UNREALIZED_FX_LOSS, drLine.accountCode)
+            assertEquals(70_000_00L, drLine.baseDebitMinor)
+
+            assertEquals(AccountConstants.CASH_VAULT, crLine.accountCode)
+            assertEquals("TR_USD_VAULT", crLine.treasuryId)
+            assertEquals(0L, crLine.origMinor)
+            assertEquals(70_000_00L, crLine.baseCreditMinor)
+
+            val usdCashAfter = db.journalDao().getNetOrigBalanceForTreasury("TR_USD_VAULT")
+            val yerBookAfter = db.journalDao().getNetDebitBalanceForTreasury("TR_USD_VAULT")
+            assertEquals(1_000_00L, usdCashAfter)
+            assertEquals(530_000_00L, yerBookAfter)
 
             invariants.verifyAll()
         }
     }
 
     /**
-     * Test 35: Unrealized FX Gain on Foreign Accounts Receivable (D.1)
-     * Customer owes $500 booked @ 530 YER (265,000 YER).
-     * Market rate jumps to 560 YER (280,000 YER):
-     * Delta = +15,000 YER (Gain). Generates: Dr 1201 (Receivables), Cr 4902 (Unrealized FX Gain).
+     * Test 33: Foreign Accounts Receivable Revaluation (Asset Monetary Item 1201) (D.1)
+     * - Customer invoice for 500 USD @ 530 YER = 265,000 YER base (26,500,000 minor).
+     * - Rate rises to 550 YER = 275,000 YER base (27,500,000 minor).
+     * - Delta = +10,000 YER (+1,000,000 minor) Unrealized FX Gain.
+     * - Auto-generated Journal Entry:
+     *   DR 1201 (partyId = customerId, baseDebit = 10,000 YER, orig = 0),
+     *   CR 4902 Unrealized FX Gain (10,000 YER).
+     * - Subledger control account reconciliation (INV-002) passes.
      */
     @Test
-    fun test35_unrealizedFxGainOnForeignAccountsReceivable() {
+    fun test33_foreignAccountsReceivableRevaluation() {
         runBlocking {
-            val customerId = "CUST_USD_RECEIVABLE_35"
-            db.partyDao().insertParty(PartyEntity(customerId, "وكيل شبكة دولار", isCustomer = true))
+            val customerId = "CUSTOMER_USD_D33"
+            db.partyDao().insertParty(PartyEntity(id = customerId, name = "وكيل الجملة بالدولار", isCustomer = true))
 
-            val dateInit = LocalDate.of(2026, 10, 1).toEpochDay()
+            val usdInvoiceMinor = 500_00L // 500 USD
             val initialRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 530_000_000L)
+            val dateEpoch = LocalDate.of(2026, 10, 5).toEpochDay()
 
-            // Invoice for 500 USD: Dr 1201 (265,000 YER), Cr 4201
             writer.postSalesInvoice(
                 partyId = customerId,
                 fiscalYear = 2026,
-                dateEpochDay = dateInit,
+                dateEpochDay = dateEpoch,
                 currency = CurrencyCode.USD,
                 exchangeRate = initialRate,
-                cardItems = emptyList(),
-                serviceItems = listOf(
-                    com.example.data.ledger.SalesItemSpec(
-                        description = "اشتراك ألياف ضوئية",
-                        quantity = 1,
-                        unitPriceMinor = 500_00L
-                    )
-                ),
-                notes = "فاتورة بالدولار"
+                cardItems = listOf(com.example.data.ledger.SalesItemSpec("كروت بالدولار", 1, usdInvoiceMinor)),
+                serviceItems = emptyList(),
+                notes = "فاتورة كروت بالدولار"
             )
 
-            // USD rate rises to 560 YER
-            val asOfDate = LocalDate.of(2026, 10, 15).toEpochDay()
-            db.currencyRateDao().insertRate(
-                CurrencyRateEntity(
-                    id = "RATE_USD_560_TEST35",
-                    currency = "USD",
-                    zone = RateZone.DEFAULT.name,
-                    rateMicros = 560_000_000L,
-                    effectiveDateEpochDay = asOfDate,
-                    createdBy = "TEST",
-                    reason = "USD Appreciation"
-                )
+            val origRecBefore = db.journalDao().getPartyReceivableOrigBalance(customerId, "USD")
+            val baseRecBefore = db.journalDao().getPartyReceivableBaseBalanceByCurrency(customerId, "USD")
+            assertEquals(500_00L, origRecBefore)
+            assertEquals(265_000_00L, baseRecBefore)
+
+            // Market rate rises to 550 YER
+            val appreciatedRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 550_000_000L)
+            val revalDate = LocalDate.of(2026, 10, 31).toEpochDay()
+
+            val doc = revaluationUseCase.revalueMonetaryItem(
+                accountCode = AccountConstants.ACCOUNTS_RECEIVABLE,
+                partyId = customerId,
+                fiscalYear = 2026,
+                dateEpochDay = revalDate,
+                foreignCurrency = CurrencyCode.USD,
+                exchangeRate = appreciatedRate,
+                notes = "إعادة تقييم ذمم عميل بالدولار"
             )
 
-            val result = revaluationUseCase.executeRevaluation(asOfDateEpochDay = asOfDate, fiscalYear = 2026)
-            assertEquals(15_000_00L, result.totalUnrealizedGainMinor)
+            assertNotNull(doc)
+            assertEquals(10_000_00L, doc!!.totalBaseMinor)
 
-            // Receivable 1201 increased to 280,000 YER
-            val recBalance = db.journalDao().getNetDebitBalanceForAccount(AccountConstants.ACCOUNTS_RECEIVABLE)
-            assertEquals(280_000_00L, recBalance)
+            val baseRecAfter = db.journalDao().getPartyReceivableBaseBalanceByCurrency(customerId, "USD")
+            assertEquals(275_000_00L, baseRecAfter)
 
-            val gainBal = -db.journalDao().getNetDebitBalanceForAccount(AccountConstants.UNREALIZED_FX_GAIN)
-            assertEquals(15_000_00L, gainBal)
+            // Subledger / Control account reconciliation must remain strictly equal
+            val glReceivable = db.journalDao().getNetDebitBalanceForAccount(AccountConstants.ACCOUNTS_RECEIVABLE)
+            val partyReceivable = db.journalDao().getPartyBalancesForControlAccount(AccountConstants.ACCOUNTS_RECEIVABLE).sumOf { it.netBalanceMinor }
+            assertEquals(glReceivable, partyReceivable)
 
             invariants.verifyAll()
         }
     }
 
     /**
-     * Test 36: Unrealized FX Loss on Foreign Accounts Payable (D.1)
-     * Vendor debt of $1,000 booked @ 530 YER (530,000 YER).
-     * Market rate jumps to 570 YER (570,000 YER):
-     * Paying the vendor now costs 40,000 YER more => Unrealized FX Loss!
-     * Generates: Dr 5902 (Unrealized FX Loss), Cr 2101 (Accounts Payable).
+     * Test 34: Foreign Accounts Payable Revaluation (Liability Monetary Item 2101) (D.1)
+     * - Vendor purchase invoice for 1,000 USD @ 530 YER = 530,000 YER base (53,000,000 minor).
+     * - Rate rises to 600 YER = 600,000 YER base (60,000,000 minor).
+     * - Liability increases by 70,000 YER -> Unrealized FX Loss!
+     * - Auto-generated Journal Entry:
+     *   DR 5902 Unrealized FX Loss (70,000 YER),
+     *   CR 2101 (partyId = vendorId, baseCredit = 70,000 YER, orig = 0).
+     * - Vendor book payable becomes 600,000 YER; subledger control reconciliation (INV-002) passes.
      */
     @Test
-    fun test36_unrealizedFxLossOnForeignAccountsPayable() {
+    fun test34_foreignAccountsPayableRevaluation() {
         runBlocking {
-            val vendorId = "VENDOR_STARLINK_USD_36"
-            db.partyDao().insertParty(PartyEntity(vendorId, "مزود خدمة Starlink", isVendor = true))
+            val vendorId = "VENDOR_STARLINK_D34"
+            db.partyDao().insertParty(PartyEntity(id = vendorId, name = "مزود ستارلينك الدولي", isVendor = true))
 
-            val dateInit = LocalDate.of(2026, 10, 1).toEpochDay()
+            val usdInvoiceMinor = 1_000_00L // 1,000 USD
             val initialRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 530_000_000L)
+            val dateEpoch = LocalDate.of(2026, 10, 5).toEpochDay()
 
-            // Purchase invoice: Dr 5101 (530,000 YER), Cr 2101 (530,000 YER)
             writer.postPurchaseInvoice(
                 vendorPartyId = vendorId,
                 fiscalYear = 2026,
-                dateEpochDay = dateInit,
+                dateEpochDay = dateEpoch,
                 currency = CurrencyCode.USD,
                 exchangeRate = initialRate,
-                items = listOf(
-                    com.example.data.ledger.PurchaseItemSpec(
-                        description = "سعات إنترنت جملة",
-                        accountCode = AccountConstants.DIRECT_ISP_SERVICE_COST,
-                        quantity = 1,
-                        unitPriceMinor = 1_000_00L
-                    )
-                ),
-                notes = "فاتورة مشتريات بالدولار"
+                items = listOf(PurchaseItemSpec("اشتراك ستارلينك", AccountConstants.DIRECT_ISP_SERVICE_COST, 1, usdInvoiceMinor)),
+                notes = "فاتورة ستارلينك بالدولار"
             )
 
-            // Rate rises to 570 YER
-            val asOfDate = LocalDate.of(2026, 10, 20).toEpochDay()
-            db.currencyRateDao().insertRate(
-                CurrencyRateEntity(
-                    id = "RATE_USD_570_TEST36",
-                    currency = "USD",
-                    zone = RateZone.DEFAULT.name,
-                    rateMicros = 570_000_000L,
-                    effectiveDateEpochDay = asOfDate,
-                    createdBy = "TEST",
-                    reason = "USD Appreciation"
-                )
-            )
+            val basePayBefore = db.journalDao().getPartyPayableBaseBalanceByCurrency(vendorId, "USD")
+            assertEquals(530_000_00L, basePayBefore)
 
-            val result = revaluationUseCase.executeRevaluation(asOfDateEpochDay = asOfDate, fiscalYear = 2026)
-            assertEquals(40_000_00L, result.totalUnrealizedLossMinor)
+            // Market rate rises to 600 YER -> liability increases, resulting in Unrealized Loss
+            val higherRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 600_000_000L)
+            val revalDate = LocalDate.of(2026, 10, 31).toEpochDay()
 
-            // Accounts payable credit balance increased to 570,000 YER
-            val apBalance = -db.journalDao().getNetDebitBalanceForAccount(AccountConstants.ACCOUNTS_PAYABLE)
-            assertEquals(570_000_00L, apBalance)
-
-            val lossBal = db.journalDao().getNetDebitBalanceForAccount(AccountConstants.UNREALIZED_FX_LOSS)
-            assertEquals(40_000_00L, lossBal)
-
-            invariants.verifyAll()
-        }
-    }
-
-    /**
-     * Test 37: Periodic Revaluation Document Type (D.1)
-     * Revaluation document is assigned type PERIODIC_REVALUATION (REV), sequential numbering,
-     * status POSTED, and full double-entry invariants pass cleanly.
-     */
-    @Test
-    fun test37_periodicRevaluationDocumentType() {
-        runBlocking {
-            val dateInit = LocalDate.of(2026, 10, 1).toEpochDay()
-            writer.postCapitalReceipt(
-                targetAccountCode = AccountConstants.CAPITAL,
-                partnerPartyId = AppDatabase.WALK_IN_CASH_PARTY_ID,
-                treasuryId = "TR_USD_VAULT",
+            val doc = revaluationUseCase.revalueMonetaryItem(
+                accountCode = AccountConstants.ACCOUNTS_PAYABLE,
+                partyId = vendorId,
                 fiscalYear = 2026,
-                dateEpochDay = dateInit,
-                amountOrigMinor = 500_00L,
-                currency = CurrencyCode.USD,
-                exchangeRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 530_000_000L),
-                notes = "رأس مال 500$"
+                dateEpochDay = revalDate,
+                foreignCurrency = CurrencyCode.USD,
+                exchangeRate = higherRate,
+                notes = "إعادة تقييم ذمم مورد بالدولار"
             )
 
-            val asOfDate = LocalDate.of(2026, 10, 15).toEpochDay()
-            db.currencyRateDao().insertRate(
-                CurrencyRateEntity(
-                    id = "RATE_USD_540_TEST37",
-                    currency = "USD",
-                    zone = RateZone.DEFAULT.name,
-                    rateMicros = 540_000_000L,
-                    effectiveDateEpochDay = asOfDate,
-                    createdBy = "TEST",
-                    reason = "Rate change"
-                )
-            )
+            assertNotNull(doc)
+            assertEquals(70_000_00L, doc!!.totalBaseMinor)
 
-            val result = revaluationUseCase.executeRevaluation(asOfDateEpochDay = asOfDate, fiscalYear = 2026)
-            assertNotNull(result.document)
-            assertEquals(DocumentType.PERIODIC_REVALUATION.name, result.document!!.type)
-            assertEquals(DocumentStatus.POSTED.name, result.document!!.status)
-            assertTrue(result.document!!.docNumber > 0)
-
-            val entries = db.journalDao().getEntriesForDocument(result.document!!.id)
-            assertEquals(1, entries.size)
+            val entries = db.journalDao().getEntriesForDocument(doc.id)
             val lines = db.journalDao().getLinesForEntry(entries[0].id)
-            assertTrue("Revaluation entry must have matching balanced lines", lines.isNotEmpty())
-            val drTotal = lines.sumOf { it.baseDebitMinor }
-            val crTotal = lines.sumOf { it.baseCreditMinor }
-            assertEquals(drTotal, crTotal)
+            val drLine = lines.first { it.baseDebitMinor > 0 }
+            val crLine = lines.first { it.baseCreditMinor > 0 }
+
+            assertEquals(AccountConstants.UNREALIZED_FX_LOSS, drLine.accountCode)
+            assertEquals(70_000_00L, drLine.baseDebitMinor)
+
+            assertEquals(AccountConstants.ACCOUNTS_PAYABLE, crLine.accountCode)
+            assertEquals(vendorId, crLine.partyId)
+            assertEquals(70_000_00L, crLine.baseCreditMinor)
+
+            val basePayAfter = db.journalDao().getPartyPayableBaseBalanceByCurrency(vendorId, "USD")
+            assertEquals(600_000_00L, basePayAfter)
+
+            // Subledger reconciliation verification
+            val glPayables = db.journalDao().getNetDebitBalanceForAccount(AccountConstants.ACCOUNTS_PAYABLE)
+            val partyPayables = db.journalDao().getPartyBalancesForControlAccount(AccountConstants.ACCOUNTS_PAYABLE).sumOf { it.netBalanceMinor }
+            assertEquals(glPayables, partyPayables)
 
             invariants.verifyAll()
         }
     }
 
     /**
-     * Test 38: Revaluation Idempotency & Zero Delta Handling (D.1)
-     * When foreign currency book value matches market rate exactly, delta = 0 and no document is created.
+     * Test 35: Strict Non-Monetary Item Invariant Enforcement (D.1)
+     * - Under IAS 21, Non-monetary items (Fixed Assets 1501, Inventory 1401, Partner Capital 3101)
+     *   MUST NEVER be revalued at period-end.
+     * - Attempting to invoke revaluation for non-monetary accounts must immediately throw IllegalArgumentException.
      */
     @Test
-    fun test38_revaluationIdempotencyAndZeroDeltaHandling() {
+    fun test35_strictNonMonetaryItemInvariantEnforcement() {
         runBlocking {
-            val asOfDate = LocalDate.of(2026, 10, 10).toEpochDay()
-            // No transactions or rate changes
-            val result = revaluationUseCase.executeRevaluation(asOfDateEpochDay = asOfDate, fiscalYear = 2026)
-            assertEquals(null, result.document)
-            assertEquals(0L, result.totalUnrealizedGainMinor)
-            assertEquals(0L, result.totalUnrealizedLossMinor)
-            assertEquals(0L, result.netUnrealizedDeltaMinor)
+            val dateEpoch = LocalDate.of(2026, 10, 31).toEpochDay()
+            val usdRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 600_000_000L)
+
+            // 1. Fixed Assets (1501)
+            try {
+                writer.postPeriodicRevaluation(
+                    accountCode = AccountConstants.FIXED_ASSETS_NETWORK,
+                    fiscalYear = 2026,
+                    dateEpochDay = dateEpoch,
+                    foreignCurrency = CurrencyCode.USD,
+                    exchangeRate = usdRate
+                )
+                fail("Expected IllegalArgumentException when revaluing Fixed Assets (1501)")
+            } catch (e: IllegalArgumentException) {
+                assertTrue(e.message?.contains("non-monetary", ignoreCase = true) == true)
+            }
+
+            // 2. Card Inventory (1401 / 1301)
+            try {
+                writer.postPeriodicRevaluation(
+                    accountCode = AccountConstants.CARD_INVENTORY_RESERVE,
+                    fiscalYear = 2026,
+                    dateEpochDay = dateEpoch,
+                    foreignCurrency = CurrencyCode.USD,
+                    exchangeRate = usdRate
+                )
+                fail("Expected IllegalArgumentException when revaluing Inventory Reserve (1301)")
+            } catch (e: IllegalArgumentException) {
+                assertTrue(e.message?.contains("non-monetary", ignoreCase = true) == true)
+            }
+
+            // 3. Partner Capital (3101)
+            try {
+                writer.postPeriodicRevaluation(
+                    accountCode = AccountConstants.CAPITAL,
+                    partyId = "SOME_PARTNER",
+                    fiscalYear = 2026,
+                    dateEpochDay = dateEpoch,
+                    foreignCurrency = CurrencyCode.USD,
+                    exchangeRate = usdRate
+                )
+                fail("Expected IllegalArgumentException when revaluing Partner Capital (3101)")
+            } catch (e: IllegalArgumentException) {
+                assertTrue(e.message?.contains("non-monetary", ignoreCase = true) == true)
+            }
         }
     }
 
     /**
-     * Test 39: Dual-Currency Trial Balance Reporting (D.2)
-     * Trial Balance displays balances in base currency YER alongside underlying original foreign currencies,
-     * maintaining total debit == total credit equilibrium.
+     * Test 36: Zero-Delta Exemption / Unchanged Exchange Rates (D.1)
+     * - When closing market rate equals book rate (delta = 0), no journal entry is created,
+     *   preventing polluting the ledger with 0-amount entries.
      */
     @Test
-    fun test39_dualCurrencyTrialBalanceReporting() {
+    fun test36_zeroDeltaExemptionAndUnchangedRates() {
         runBlocking {
-            val date = LocalDate.of(2026, 10, 5).toEpochDay()
-            val rate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 530_000_000L)
+            val partnerId = "PARTNER_D36"
+            db.partyDao().insertParty(PartyEntity(id = partnerId, name = "شريك تمويل د36", isPartner = true))
 
-            // Capital in USD ($2,000 = 1,060,000 YER)
+            val usdAmountMinor = 1_000_00L
+            val rate530 = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 530_000_000L)
+            val dateEpoch = LocalDate.of(2026, 10, 5).toEpochDay()
+
             writer.postCapitalReceipt(
                 targetAccountCode = AccountConstants.CAPITAL,
-                partnerPartyId = AppDatabase.WALK_IN_CASH_PARTY_ID,
+                partnerPartyId = partnerId,
                 treasuryId = "TR_USD_VAULT",
                 fiscalYear = 2026,
-                dateEpochDay = date,
-                amountOrigMinor = 2_000_00L,
+                dateEpochDay = dateEpoch,
+                amountOrigMinor = usdAmountMinor,
                 currency = CurrencyCode.USD,
-                exchangeRate = rate,
-                notes = "رأس مال بالدولار"
+                exchangeRate = rate530
             )
 
-            val dualTb = statementsUseCase.generateDualCurrencyTrialBalance()
-            assertTrue("Trial balance must be mathematically balanced", dualTb.isBalanced)
-            assertEquals(dualTb.totalBaseDebitMinor, dualTb.totalBaseCreditMinor)
+            // Revalue with unchanged rate (530 YER)
+            val revalDoc = revaluationUseCase.revalueMonetaryItem(
+                accountCode = AccountConstants.CASH_VAULT,
+                treasuryId = "TR_USD_VAULT",
+                fiscalYear = 2026,
+                dateEpochDay = dateEpoch,
+                foreignCurrency = CurrencyCode.USD,
+                exchangeRate = rate530
+            )
 
-            val treasuryRow = dualTb.rows.find { it.accountCode == AccountConstants.CASH_VAULT }
-            assertNotNull(treasuryRow)
-            assertEquals(1_060_000_00L, treasuryRow!!.baseDebitMinor)
-            assertEquals(2_000_00L, treasuryRow.originalBalances[CurrencyCode.USD])
+            // Must return null and create zero documents
+            assertNull("Zero delta revaluation must return null and post no document", revalDoc)
+
+            val totalDocs = db.documentDao().getAllDocumentsSync()
+            assertEquals("Only the capital receipt should exist in the document store", 1, totalDocs.size)
+
+            invariants.verifyAll()
         }
     }
 
     /**
-     * Test 40: Profit & Loss Statement Realized vs Unrealized FX Reporting (D.2)
-     * Profit & Loss statement reports Realized FX (4901/5901) and Unrealized FX (4902/5902) separately,
-     * and correctly integrates both into net profit computation.
+     * Test 37: Periodic Revaluation Document Type (PERIODIC_REVALUATION / REV) & Numbering (D.1)
+     * - Revaluation creates document with type PERIODIC_REVALUATION (prefix REV)
+     * - Sequential docNumber increments atomically per fiscal year.
      */
     @Test
-    fun test40_profitAndLossStatementRealizedVsUnrealizedFxReporting() {
+    fun test37_periodicRevaluationDocumentTypeAndSequentialNumbering() {
         runBlocking {
-            val date = LocalDate.of(2026, 10, 5).toEpochDay()
-            val rateInit = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 530_000_000L)
+            val partnerId = "PARTNER_D37"
+            db.partyDao().insertParty(PartyEntity(id = partnerId, name = "شريك د37", isPartner = true))
 
-            // Deposit $1,000 into USD Vault (530,000 YER)
+            val initialRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 530_000_000L)
+            val dateEpoch = LocalDate.of(2026, 10, 5).toEpochDay()
+
             writer.postCapitalReceipt(
                 targetAccountCode = AccountConstants.CAPITAL,
-                partnerPartyId = AppDatabase.WALK_IN_CASH_PARTY_ID,
+                partnerPartyId = partnerId,
                 treasuryId = "TR_USD_VAULT",
                 fiscalYear = 2026,
-                dateEpochDay = date,
+                dateEpochDay = dateEpoch,
+                amountOrigMinor = 2_000_00L, // 2,000 USD
+                currency = CurrencyCode.USD,
+                exchangeRate = initialRate
+            )
+
+            // First revaluation run: rate 550 YER
+            val rate550 = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 550_000_000L)
+            val doc1 = revaluationUseCase.revalueMonetaryItem(
+                accountCode = AccountConstants.CASH_VAULT,
+                treasuryId = "TR_USD_VAULT",
+                fiscalYear = 2026,
+                dateEpochDay = dateEpoch,
+                foreignCurrency = CurrencyCode.USD,
+                exchangeRate = rate550
+            )
+            assertNotNull(doc1)
+            assertEquals("PERIODIC_REVALUATION", doc1!!.type)
+            assertEquals(DocumentType.PERIODIC_REVALUATION.codePrefix, "REV")
+            assertEquals(1L, doc1.docNumber)
+
+            // Second revaluation run: rate 570 YER
+            val rate570 = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 570_000_000L)
+            val doc2 = revaluationUseCase.revalueMonetaryItem(
+                accountCode = AccountConstants.CASH_VAULT,
+                treasuryId = "TR_USD_VAULT",
+                fiscalYear = 2026,
+                dateEpochDay = dateEpoch + 1,
+                foreignCurrency = CurrencyCode.USD,
+                exchangeRate = rate570
+            )
+            assertNotNull(doc2)
+            assertEquals(2L, doc2!!.docNumber)
+
+            invariants.verifyAll()
+        }
+    }
+
+    /**
+     * Test 38: Dual-Currency Trial Balance & Ledger Reporting (D.2)
+     * - Accounts report balances in original foreign currency alongside base currency YER.
+     * - USD Treasury reports orig balance 1,000.00 USD and base balance in YER.
+     * - Total debits equal credits in base YER.
+     */
+    @Test
+    fun test38_dualCurrencyTrialBalanceReporting() {
+        runBlocking {
+            val partnerId = "PARTNER_D38"
+            db.partyDao().insertParty(PartyEntity(id = partnerId, name = "شريك د38", isPartner = true))
+
+            val dateEpoch = LocalDate.of(2026, 10, 5).toEpochDay()
+            val usdRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 530_000_000L)
+
+            // 1,000 USD to TR_USD_VAULT
+            writer.postCapitalReceipt(
+                targetAccountCode = AccountConstants.CAPITAL,
+                partnerPartyId = partnerId,
+                treasuryId = "TR_USD_VAULT",
+                fiscalYear = 2026,
+                dateEpochDay = dateEpoch,
                 amountOrigMinor = 1_000_00L,
                 currency = CurrencyCode.USD,
-                exchangeRate = rateInit,
-                notes = "تمويل الصندوق"
+                exchangeRate = usdRate
             )
 
-            // Revaluation at 550 YER: Unrealized FX Gain = +20,000 YER
-            val asOfDate = LocalDate.of(2026, 10, 10).toEpochDay()
-            db.currencyRateDao().insertRate(
-                CurrencyRateEntity(
-                    id = "RATE_USD_550_TEST40",
-                    currency = "USD",
-                    zone = RateZone.DEFAULT.name,
-                    rateMicros = 550_000_000L,
-                    effectiveDateEpochDay = asOfDate,
-                    createdBy = "TEST",
-                    reason = "Rate jump"
-                )
+            // 100,000 YER to TR_MAIN_YER
+            writer.postCapitalReceipt(
+                targetAccountCode = AccountConstants.CAPITAL,
+                partnerPartyId = partnerId,
+                treasuryId = "TR_MAIN_YER",
+                fiscalYear = 2026,
+                dateEpochDay = dateEpoch,
+                amountOrigMinor = 100_000_00L,
+                currency = CurrencyCode.YER,
+                exchangeRate = ExchangeRate.parity(CurrencyCode.YER)
             )
-            revaluationUseCase.executeRevaluation(asOfDateEpochDay = asOfDate, fiscalYear = 2026)
 
-            // Fetch income statement
-            val incomeReport = statementsUseCase.generateIncomeStatement(startDateEpochDay = null, endDateEpochDay = asOfDate)
-            assertEquals(20_000_00L, incomeReport.unrealizedFxGainMinor)
-            assertEquals(0L, incomeReport.unrealizedFxLossMinor)
-            assertEquals(20_000_00L, incomeReport.netProfitMinor)
+            val trialBalance = statementsUseCase.generateDualCurrencyTrialBalance(dateEpoch)
+            assertTrue("Trial balance must be in equilibrium", trialBalance.isBalanced)
+            assertEquals(trialBalance.totalBaseDebitMinor, trialBalance.totalBaseCreditMinor)
 
+            // Verify dual-currency cash vault account row
+            val cashVaultRow = trialBalance.rows.first { it.accountCode == AccountConstants.CASH_VAULT }
+            assertTrue(cashVaultRow.baseDebitMinor > 0)
+            assertEquals(1_000_00L + 100_000_00L, cashVaultRow.origDebitMinor)
+
+            invariants.verifyAll()
+        }
+    }
+
+    /**
+     * Test 39: Dual FX Disclosure in Profit & Loss Statement (IAS 21) (D.2)
+     * - Income Statement accurately separates and reports:
+     *   * Realized FX Gains (4901) and Losses (5901)
+     *   * Unrealized FX Gains (4902) and Losses (5902)
+     * - Net profit reflects the combined impact of operating profits and total net FX.
+     */
+    @Test
+    fun test39_dualFxDisclosureInProfitAndLossStatement() {
+        runBlocking {
+            val partnerId = "PARTNER_D39"
+            val customerId = "CUSTOMER_D39"
+            db.partyDao().insertParty(PartyEntity(id = partnerId, name = "شريك د39", isPartner = true))
+            db.partyDao().insertParty(PartyEntity(id = customerId, name = "عميل د39", isCustomer = true))
+
+            val dateEpoch = LocalDate.of(2026, 10, 5).toEpochDay()
+            val initialRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 530_000_000L)
+
+            // 1. Initial USD capital: 1,000 USD @ 530 YER = 530,000 YER
+            writer.postCapitalReceipt(
+                targetAccountCode = AccountConstants.CAPITAL,
+                partnerPartyId = partnerId,
+                treasuryId = "TR_USD_VAULT",
+                fiscalYear = 2026,
+                dateEpochDay = dateEpoch,
+                amountOrigMinor = 1_000_00L,
+                currency = CurrencyCode.USD,
+                exchangeRate = initialRate
+            )
+
+            // 2. Sales invoice: 100 USD @ 530 YER = 53,000 YER
+            val inv = writer.postSalesInvoice(
+                partyId = customerId,
+                fiscalYear = 2026,
+                dateEpochDay = dateEpoch,
+                currency = CurrencyCode.USD,
+                exchangeRate = initialRate,
+                cardItems = listOf(com.example.data.ledger.SalesItemSpec("كروت بالدولار", 1, 100_00L)),
+                serviceItems = emptyList()
+            )
+
+            // 3. Customer pays invoice at 540 YER rate -> Realized FX Gain of 100 * 10 = 1,000 YER (100,000 minor)
+            val paymentRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 540_000_000L)
+            writer.postCustomerReceipt(
+                partyId = customerId,
+                treasuryId = "TR_USD_VAULT",
+                fiscalYear = 2026,
+                dateEpochDay = dateEpoch + 1,
+                amountOrigMinor = 100_00L,
+                currency = CurrencyCode.USD,
+                exchangeRate = paymentRate,
+                allocations = listOf(com.example.data.ledger.InvoiceAllocationSpec(inv.id, 100_00L))
+            )
+
+            // 4. Period-end revaluation of TR_USD_VAULT at 600 YER:
+            // Vault has 1,100 USD.
+            // Book balance: 530,000 + 54,000 = 584,000 YER.
+            // Market value: 1,100 * 600 = 660,000 YER.
+            // Unrealized FX Gain: 660,000 - 584,000 = 76,000 YER (7,600,000 minor).
+            val revalRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 600_000_000L)
+            revaluationUseCase.revalueMonetaryItem(
+                accountCode = AccountConstants.CASH_VAULT,
+                treasuryId = "TR_USD_VAULT",
+                fiscalYear = 2026,
+                dateEpochDay = dateEpoch + 2,
+                foreignCurrency = CurrencyCode.USD,
+                exchangeRate = revalRate
+            )
+
+            // Generate Income Statement
+            val pnl = statementsUseCase.generateIncomeStatement(dateEpoch, dateEpoch + 10)
+
+            assertEquals("Card Revenue must be 53,000 YER", 53_000_00L, pnl.cardRevenueMinor)
+            assertEquals("Realized FX Gain (4901) must be 1,000 YER", 1_000_00L, pnl.realizedFxGainMinor)
+            assertEquals("Realized FX Loss (5901) must be 0", 0L, pnl.realizedFxLossMinor)
+            assertEquals("Unrealized FX Gain (4902) must be 76,000 YER", 76_000_00L, pnl.unrealizedFxGainMinor)
+            assertEquals("Unrealized FX Loss (5902) must be 0", 0L, pnl.unrealizedFxLossMinor)
+
+            val expectedNetProfit = 53_000_00L + 1_000_00L + 76_000_00L
+            assertEquals(expectedNetProfit, pnl.netProfitMinor)
+            assertEquals(77_000_00L, pnl.totalFxNetMinor)
+
+            invariants.verifyAll()
+        }
+    }
+
+    /**
+     * Test 40: Dual-Currency Balance Sheet Equilibrium & Revaluation Voiding Reversal (D.1 / D.2)
+     * - Balance Sheet stays in perfect equilibrium before and after revaluation.
+     * - Voiding the revaluation document cleanly generates a REVERSAL entry, restores original book YER balance,
+     *   sets document status to VOIDED, and satisfies all ledger invariants.
+     */
+    @Test
+    fun test40_balanceSheetEquilibriumAndRevaluationVoidingReversal() {
+        runBlocking {
+            val partnerId = "PARTNER_D40"
+            db.partyDao().insertParty(PartyEntity(id = partnerId, name = "شريك د40", isPartner = true))
+
+            val dateEpoch = LocalDate.of(2026, 10, 5).toEpochDay()
+            val initialRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 530_000_000L)
+
+            // 1,000 USD capital @ 530 YER = 530,000 YER
+            writer.postCapitalReceipt(
+                targetAccountCode = AccountConstants.CAPITAL,
+                partnerPartyId = partnerId,
+                treasuryId = "TR_USD_VAULT",
+                fiscalYear = 2026,
+                dateEpochDay = dateEpoch,
+                amountOrigMinor = 1_000_00L,
+                currency = CurrencyCode.USD,
+                exchangeRate = initialRate
+            )
+
+            // Revalue at 600 YER (+70,000 YER gain)
+            val higherRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 600_000_000L)
+            val revalDoc = revaluationUseCase.revalueMonetaryItem(
+                accountCode = AccountConstants.CASH_VAULT,
+                treasuryId = "TR_USD_VAULT",
+                fiscalYear = 2026,
+                dateEpochDay = dateEpoch + 1,
+                foreignCurrency = CurrencyCode.USD,
+                exchangeRate = higherRate
+            )
+            assertNotNull(revalDoc)
+
+            // Balance sheet must be balanced after revaluation
+            val bsAfterReval = statementsUseCase.generateBalanceSheet(dateEpoch + 2)
+            assertTrue("Balance sheet must be balanced after revaluation", bsAfterReval.isBalanced)
+            assertEquals(600_000_00L, bsAfterReval.totalAssetsMinor)
+            assertEquals(600_000_00L, bsAfterReval.totalLiabilitiesAndEquityMinor)
+
+            // Now void the revaluation document
+            val voidSuccess = writer.voidDocument(
+                docId = revalDoc!!.id,
+                reversalDateEpochDay = dateEpoch + 3,
+                reason = "إلغاء قيد إعادة التقييم لخطأ في سعر الصرف المعتمد"
+            )
+            assertTrue("Voiding revaluation document must succeed", voidSuccess)
+
+            val updatedDoc = db.documentDao().getDocumentById(revalDoc.id)
+            assertEquals(DocumentStatus.VOIDED.name, updatedDoc?.status)
+
+            // Treasury book balance must revert back to 530,000 YER
+            val bookYerReverted = db.journalDao().getNetDebitBalanceForTreasury("TR_USD_VAULT")
+            assertEquals(530_000_00L, bookYerReverted)
+
+            // Reversal entry created
+            val entries = db.journalDao().getEntriesForDocument(revalDoc.id)
+            assertEquals(2, entries.size)
+            assertTrue(entries.any { it.type == "REVERSAL" })
+
+            // Balance sheet remains balanced after voiding
+            val bsAfterVoid = statementsUseCase.generateBalanceSheet(dateEpoch + 4)
+            assertTrue("Balance sheet must remain balanced after voiding", bsAfterVoid.isBalanced)
+            assertEquals(530_000_00L, bsAfterVoid.totalAssetsMinor)
+            assertEquals(530_000_00L, bsAfterVoid.totalLiabilitiesAndEquityMinor)
+
+            // Comprehensive ledger invariant audit passes cleanly
             invariants.verifyAll()
         }
     }
