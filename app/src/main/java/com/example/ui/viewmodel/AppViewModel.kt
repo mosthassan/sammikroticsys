@@ -460,6 +460,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         notes: String,
         rateZone: RateZone = RateZone.DEFAULT,
         rateSource: com.example.core.model.RateSource = com.example.core.model.RateSource.SYSTEM_DAILY,
+        onError: (String) -> Unit = {},
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
@@ -484,7 +485,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 refreshDashboard()
                 onSuccess()
             } catch (e: Exception) {
-                _userMessage.emit("فشل تسجيل سند القبض: ${e.message}")
+                val msg = e.message ?: "فشل تسجيل سند القبض"
+                _userMessage.emit("فشل تسجيل سند القبض: $msg")
+                onError(msg)
             }
         }
     }
@@ -501,10 +504,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         notes: String,
         rateZone: RateZone = RateZone.DEFAULT,
         rateSource: com.example.core.model.RateSource = com.example.core.model.RateSource.SYSTEM_DAILY,
+        allowOverdraft: Boolean = true,
+        onError: (String) -> Unit = {},
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
             try {
+                if (allowOverdraft) {
+                    db.treasuryDao().setAllowNegative(treasuryId, true)
+                }
                 val now = getLocalNow()
                 val fiscalYear = now.year
                 val today = now.toEpochDay()
@@ -527,7 +535,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 refreshDashboard()
                 onSuccess()
             } catch (e: Exception) {
-                _userMessage.emit("فشل تسجيل سند الصرف: ${e.message}")
+                val msg = e.message ?: "فشل تسجيل سند الصرف"
+                _userMessage.emit("فشل تسجيل سند الصرف: $msg")
+                onError(msg)
             }
         }
     }

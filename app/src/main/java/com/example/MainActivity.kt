@@ -141,6 +141,7 @@ class MainActivity : ComponentActivity() {
                 val snackbarHostState = remember { SnackbarHostState() }
 
                 var selectedTabIndex by rememberSaveable { mutableIntStateOf(0) }
+                var vouchersInitialTab by rememberSaveable { mutableIntStateOf(0) }
                 val invariantResult by appViewModel.invariantResult.collectAsState()
                 val syncState by appViewModel.syncState.collectAsState()
                 val currentUser by appViewModel.currentUser.collectAsState()
@@ -277,13 +278,19 @@ class MainActivity : ComponentActivity() {
                             viewModel = appViewModel,
                             onNavigateToQuickSale = { selectedTabIndex = 1 },
                             onNavigateToSales = { selectedTabIndex = 1 },
-                            onNavigateToReceipts = { selectedTabIndex = 2 },
-                            onNavigateToPayments = { selectedTabIndex = 2 },
+                            onNavigateToReceipts = {
+                                vouchersInitialTab = 0
+                                selectedTabIndex = 2
+                            },
+                            onNavigateToPayments = {
+                                vouchersInitialTab = 1
+                                selectedTabIndex = 2
+                            },
                             onNavigateToReports = { selectedTabIndex = 6 },
                             modifier = modifier
                         )
                         1 -> SalesScreen(viewModel = appViewModel, modifier = modifier)
-                        2 -> VouchersScreen(viewModel = appViewModel, modifier = modifier)
+                        2 -> VouchersScreen(viewModel = appViewModel, initialTab = vouchersInitialTab, modifier = modifier)
                         3 -> PurchasesAssetsScreen(viewModel = appViewModel, modifier = modifier)
                         4 -> PartiesAndStockCombinedScreen(viewModel = appViewModel, modifier = modifier)
                         5 -> NetworkHubScreen(
