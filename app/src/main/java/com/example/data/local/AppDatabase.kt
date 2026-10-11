@@ -119,7 +119,7 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                 """)
                 db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_journal_entries_entryNumber ON journal_entries(entryNumber)")
-                db.execSQL("INSERT OR REPLACE INTO number_sequences (docType, fiscalYear, nextVal) VALUES ('JOURNAL_ENTRY', 0, (SELECT COALESCE(MAX(entryNumber), 0) + 1 FROM journal_entries))")
+                db.execSQL("INSERT OR REPLACE INTO number_sequences (docType, fiscalYear, nextValue) VALUES ('JOURNAL_ENTRY', 0, (SELECT COALESCE(MAX(entryNumber), 0) + 1 FROM journal_entries))")
             }
         }
 

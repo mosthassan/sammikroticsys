@@ -250,4 +250,37 @@ class AccountingCoreFixesTest {
         val closedCount = db.fiscalPeriodDao().getClosedPeriods().filter { it.year == 2026 }.size
         assertEquals(12, closedCount)
     }
+
+    @Test
+    fun testMigration3To4ExecutesWithoutSqlErrors() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.deleteDatabase("test_migration.db")
+        val config = androidx.sqlite.db.SupportSQLiteOpenHelper.Configuration.builder(context)
+            .name("test_migration.db")
+            .callback(object : androidx.sqlite.db.SupportSQLiteOpenHelper.Callback(3) {
+                override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                    db.execSQL("CREATE TABLE organizations (id TEXT PRIMARY KEY, equityShareMode TEXT NOT NULL DEFAULT 'DERIVED_FROM_CAPITAL')")
+                    db.execSQL("CREATE TABLE documents (id TEXT PRIMARY KEY)")
+                    db.execSQL("CREATE TABLE journal_entries (id TEXT PRIMARY KEY, entryNumber INTEGER NOT NULL, createdAt INTEGER NOT NULL)")
+                    db.execSQL("CREATE TABLE number_sequences (docType TEXT NOT NULL, fiscalYear INTEGER NOT NULL, nextValue INTEGER NOT NULL, PRIMARY KEY(docType, fiscalYear))")
+                    db.execSQL("INSERT INTO journal_entries (id, entryNumber, createdAt) VALUES ('J1', 1, 1000)")
+                    db.execSQL("INSERT INTO journal_entries (id, entryNumber, createdAt) VALUES ('J2', 2, 2000)")
+                }
+                override fun onUpgrade(db: androidx.sqlite.db.SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+            })
+            .build()
+        val helper = androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory().create(config)
+        val supportDb = helper.writableDatabase
+
+        // Execute MIGRATION_3_4
+        AppDatabase.MIGRATION_3_4.migrate(supportDb)
+
+        // Verify number_sequences was updated with nextValue
+        val cursor = supportDb.query("SELECT nextValue FROM number_sequences WHERE docType = 'JOURNAL_ENTRY'")
+        assertTrue(cursor.moveToFirst())
+        assertEquals(3L, cursor.getLong(0))
+        cursor.close()
+        helper.close()
+        context.deleteDatabase("test_migration.db")
+    }
 }

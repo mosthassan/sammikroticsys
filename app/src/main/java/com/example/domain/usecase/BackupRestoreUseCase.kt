@@ -343,8 +343,12 @@ class BackupRestoreUseCase(
 
     suspend fun restoreDatabaseFromJson(jsonString: String): Result<String> = runCatching {
         val root = JSONObject(jsonString)
-        val schemaVer = root.optInt("schemaVersion", -1)
-        require(schemaVer == 1) { "Unsupported backup schema version: $schemaVer" }
+        val schemaVer = if (root.has("schemaVersion")) {
+            root.optInt("schemaVersion", 1)
+        } else {
+            root.optInt("version", 1)
+        }
+        require(schemaVer in 1..4) { "Unsupported backup schema version: $schemaVer" }
 
         // Verify SHA-256 integrity if present
         if (root.has("sha256")) {
@@ -468,33 +472,74 @@ class BackupRestoreUseCase(
             }
             trStmt.close()
 
-            // 4. Restore Documents
+            // 4. Restore Documents (with guaranteed unique sequential docNumber per type and fiscalYear)
             val docsArr = root.optJSONArray("documents") ?: JSONArray()
+            val rawDocs = mutableListOf<RestoredDocData>()
+            for (i in 0 until docsArr.length()) {
+                val d = docsArr.getJSONObject(i)
+                rawDocs.add(
+                    RestoredDocData(
+                        id = d.getString("id"),
+                        type = d.getString("type"),
+                        fiscalYear = d.getInt("fiscalYear"),
+                        docNumber = d.optLong("docNumber", 0L),
+                        partyId = d.getString("partyId"),
+                        dateEpochDay = d.getLong("dateEpochDay"),
+                        currency = d.getString("currency"),
+                        exchangeRateMicros = d.getLong("exchangeRateMicros"),
+                        rateZone = d.optString("rateZone", "SANAA"),
+                        rateSource = d.optString("rateSource", "SYSTEM_DAILY"),
+                        totalMinor = d.getLong("totalMinor"),
+                        totalBaseMinor = d.getLong("totalBaseMinor"),
+                        status = d.getString("status"),
+                        notes = d.optString("notes", ""),
+                        reversalOfDocId = if (d.isNull("reversalOfDocId")) null else d.getString("reversalOfDocId"),
+                        revision = d.optInt("revision", 0),
+                        createdAt = d.optLong("createdAt", System.currentTimeMillis())
+                    )
+                )
+            }
+
+            val sanitizedDocs = rawDocs.groupBy { Pair(it.type, it.fiscalYear) }.flatMap { (_, groupDocs) ->
+                val seenDocNumbers = mutableSetOf<Long>()
+                val hasDuplicateOrInvalid = groupDocs.any { it.docNumber <= 0L || !seenDocNumbers.add(it.docNumber) }
+                if (hasDuplicateOrInvalid) {
+                    val sorted = groupDocs.sortedWith(
+                        compareBy<RestoredDocData> { it.dateEpochDay }
+                            .thenBy { it.createdAt }
+                            .thenBy { it.id }
+                    )
+                    var counter = 1L
+                    sorted.map { it.copy(docNumber = counter++) }
+                } else {
+                    groupDocs
+                }
+            }
+
             val docStmt = sdb.compileStatement("""
                 INSERT INTO documents 
                 (id, type, fiscalYear, docNumber, partyId, dateEpochDay, currency, exchangeRateMicros, rateZone, rateSource, totalMinor, totalBaseMinor, status, notes, reversalOfDocId, revision, createdAt)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """.trimIndent())
-            for (i in 0 until docsArr.length()) {
-                val d = docsArr.getJSONObject(i)
+            for (d in sanitizedDocs) {
                 docStmt.clearBindings()
-                docStmt.bindString(1, d.getString("id"))
-                docStmt.bindString(2, d.getString("type"))
-                docStmt.bindLong(3, d.getLong("fiscalYear"))
-                docStmt.bindLong(4, d.getLong("docNumber"))
-                docStmt.bindString(5, d.getString("partyId"))
-                docStmt.bindLong(6, d.getLong("dateEpochDay"))
-                docStmt.bindString(7, d.getString("currency"))
-                docStmt.bindLong(8, d.getLong("exchangeRateMicros"))
-                docStmt.bindString(9, d.optString("rateZone", "SANAA"))
-                docStmt.bindString(10, d.optString("rateSource", "SYSTEM_DAILY"))
-                docStmt.bindLong(11, d.getLong("totalMinor"))
-                docStmt.bindLong(12, d.getLong("totalBaseMinor"))
-                docStmt.bindString(13, d.getString("status"))
-                docStmt.bindString(14, d.optString("notes", ""))
-                if (d.isNull("reversalOfDocId")) docStmt.bindNull(15) else docStmt.bindString(15, d.getString("reversalOfDocId"))
-                docStmt.bindLong(16, d.optLong("revision", 0L))
-                docStmt.bindLong(17, d.optLong("createdAt", System.currentTimeMillis()))
+                docStmt.bindString(1, d.id)
+                docStmt.bindString(2, d.type)
+                docStmt.bindLong(3, d.fiscalYear.toLong())
+                docStmt.bindLong(4, d.docNumber)
+                docStmt.bindString(5, d.partyId)
+                docStmt.bindLong(6, d.dateEpochDay)
+                docStmt.bindString(7, d.currency)
+                docStmt.bindLong(8, d.exchangeRateMicros)
+                docStmt.bindString(9, d.rateZone)
+                docStmt.bindString(10, d.rateSource)
+                docStmt.bindLong(11, d.totalMinor)
+                docStmt.bindLong(12, d.totalBaseMinor)
+                docStmt.bindString(13, d.status)
+                docStmt.bindString(14, d.notes)
+                if (d.reversalOfDocId == null) docStmt.bindNull(15) else docStmt.bindString(15, d.reversalOfDocId)
+                docStmt.bindLong(16, d.revision.toLong())
+                docStmt.bindLong(17, d.createdAt)
                 docStmt.executeInsert()
             }
             docStmt.close()
@@ -523,24 +568,54 @@ class BackupRestoreUseCase(
             }
             itemStmt.close()
 
-            // 6. Restore Journal Entries
+            // 6. Restore Journal Entries (with guaranteed unique sequential entryNumber in chronological order)
             val entriesArr = root.optJSONArray("journal_entries") ?: JSONArray()
+            val rawEntries = mutableListOf<RestoredEntryData>()
+            for (i in 0 until entriesArr.length()) {
+                val je = entriesArr.getJSONObject(i)
+                rawEntries.add(
+                    RestoredEntryData(
+                        id = je.getString("id"),
+                        docId = je.getString("docId"),
+                        entryNumber = je.optLong("entryNumber", 0L),
+                        entryDateEpochDay = je.getLong("entryDateEpochDay"),
+                        type = je.getString("type"),
+                        memo = je.getString("memo"),
+                        reversalOfEntryId = if (je.isNull("reversalOfEntryId")) null else je.getString("reversalOfEntryId"),
+                        createdAt = je.optLong("createdAt", System.currentTimeMillis())
+                    )
+                )
+            }
+
+            val seenEntryNumbers = mutableSetOf<Long>()
+            val hasDuplicateOrInvalidEntryNumber = rawEntries.any { it.entryNumber <= 0L || !seenEntryNumbers.add(it.entryNumber) }
+            val sanitizedEntries = if (hasDuplicateOrInvalidEntryNumber) {
+                val sorted = rawEntries.sortedWith(
+                    compareBy<RestoredEntryData> { it.entryDateEpochDay }
+                        .thenBy { it.createdAt }
+                        .thenBy { it.id }
+                )
+                var entrySeq = 1L
+                sorted.map { it.copy(entryNumber = entrySeq++) }
+            } else {
+                rawEntries
+            }
+
             val entryStmt = sdb.compileStatement("""
                 INSERT INTO journal_entries 
                 (id, docId, entryNumber, entryDateEpochDay, type, memo, reversalOfEntryId, createdAt)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """.trimIndent())
-            for (i in 0 until entriesArr.length()) {
-                val je = entriesArr.getJSONObject(i)
+            for (je in sanitizedEntries) {
                 entryStmt.clearBindings()
-                entryStmt.bindString(1, je.getString("id"))
-                entryStmt.bindString(2, je.getString("docId"))
-                entryStmt.bindLong(3, je.getLong("entryNumber"))
-                entryStmt.bindLong(4, je.getLong("entryDateEpochDay"))
-                entryStmt.bindString(5, je.getString("type"))
-                entryStmt.bindString(6, je.getString("memo"))
-                if (je.isNull("reversalOfEntryId")) entryStmt.bindNull(7) else entryStmt.bindString(7, je.getString("reversalOfEntryId"))
-                entryStmt.bindLong(8, je.optLong("createdAt", System.currentTimeMillis()))
+                entryStmt.bindString(1, je.id)
+                entryStmt.bindString(2, je.docId)
+                entryStmt.bindLong(3, je.entryNumber)
+                entryStmt.bindLong(4, je.entryDateEpochDay)
+                entryStmt.bindString(5, je.type)
+                entryStmt.bindString(6, je.memo)
+                if (je.reversalOfEntryId == null) entryStmt.bindNull(7) else entryStmt.bindString(7, je.reversalOfEntryId)
+                entryStmt.bindLong(8, je.createdAt)
                 entryStmt.executeInsert()
             }
             entryStmt.close()
@@ -651,6 +726,32 @@ class BackupRestoreUseCase(
                 seqStmt.executeInsert()
             }
             seqStmt.close()
+
+            // Guarantee that number_sequences are at least MAX + 1 for journal entries and documents
+            sdb.execSQL("""
+                INSERT OR REPLACE INTO number_sequences (docType, fiscalYear, nextValue)
+                VALUES (
+                    'JOURNAL_ENTRY',
+                    0,
+                    MAX(
+                        COALESCE((SELECT nextValue FROM number_sequences WHERE docType = 'JOURNAL_ENTRY' AND fiscalYear = 0), 1),
+                        (SELECT COALESCE(MAX(entryNumber), 0) + 1 FROM journal_entries)
+                    )
+                )
+            """.trimIndent())
+
+            sdb.execSQL("""
+                INSERT OR REPLACE INTO number_sequences (docType, fiscalYear, nextValue)
+                SELECT 
+                    d.type, 
+                    d.fiscalYear, 
+                    MAX(
+                        COALESCE((SELECT ns.nextValue FROM number_sequences ns WHERE ns.docType = d.type AND ns.fiscalYear = d.fiscalYear), 1),
+                        MAX(d.docNumber) + 1
+                    )
+                FROM documents d
+                GROUP BY d.type, d.fiscalYear
+            """.trimIndent())
 
             // 12. Restore Fiscal Periods
             val periodsArr = root.optJSONArray("fiscal_periods") ?: JSONArray()
@@ -870,3 +971,34 @@ class BackupRestoreUseCase(
         return hashBytes.joinToString("") { "%02x".format(it) }
     }
 }
+
+private data class RestoredDocData(
+    val id: String,
+    val type: String,
+    val fiscalYear: Int,
+    val docNumber: Long,
+    val partyId: String,
+    val dateEpochDay: Long,
+    val currency: String,
+    val exchangeRateMicros: Long,
+    val rateZone: String,
+    val rateSource: String,
+    val totalMinor: Long,
+    val totalBaseMinor: Long,
+    val status: String,
+    val notes: String,
+    val reversalOfDocId: String?,
+    val revision: Int,
+    val createdAt: Long
+)
+
+private data class RestoredEntryData(
+    val id: String,
+    val docId: String,
+    val entryNumber: Long,
+    val entryDateEpochDay: Long,
+    val type: String,
+    val memo: String,
+    val reversalOfEntryId: String?,
+    val createdAt: Long
+)
