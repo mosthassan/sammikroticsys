@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Money
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Receipt
+import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.TrendingDown
 import androidx.compose.material.icons.filled.TrendingUp
@@ -103,6 +104,60 @@ fun DashboardScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // App Title Banner
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("dashboard_app_title_card"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                ),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    BrandCyanPrimary.copy(alpha = 0.4f)
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(CircleShape)
+                            .background(BrandCyanPrimary.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Router,
+                            contentDescription = null,
+                            tint = BrandCyanPrimary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = "سام ميكروتك نظام ادارة الشبكات",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "نظام مالي ومحاسبي متكامل لإدارة شبكات الإنترنت والمايكروتك",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = BrandCyanPrimary,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+        }
+
         // Invariant Status Banner
         item {
             InvariantBanner(

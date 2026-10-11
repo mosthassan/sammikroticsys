@@ -99,7 +99,8 @@ import com.example.ui.theme.SemanticIncomeGreen
 import com.example.ui.viewmodel.AppViewModel
 
 object AppBrand {
-    const val NAME = "SamMikrotik"
+    const val NAME = "سام ميكروتك"
+    const val DASHBOARD_TITLE = "سام ميكروتك نظام ادارة الشبكات"
     const val TAGLINE = "النظام المالي المحاسبي المتكامل لشبكات الإنترنت"
 }
 
@@ -171,7 +172,7 @@ class MainActivity : ComponentActivity() {
                             title = {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                     Text(
-                                        text = AppBrand.NAME,
+                                        text = if (selectedTabIndex == 0) AppBrand.DASHBOARD_TITLE else AppBrand.NAME,
                                         style = MaterialTheme.typography.titleMedium,
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.onSurface
