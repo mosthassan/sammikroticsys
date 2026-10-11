@@ -57,6 +57,16 @@ class AccountingRepository(
     }
 
     /**
+     * Returns the total capital and equity balance of a partner in functional currency (YER minor units),
+     * aggregating Account 3101 (Partner Capital) and Account 3201 (Partner Current Account).
+     */
+    suspend fun getPartnerTotalEquity(partyId: String): Long {
+        val capital = db.journalDao().getPartnerCapitalBalanceSync(partyId)
+        val current = db.journalDao().getPartnerCurrentBalanceSync(partyId)
+        return capital + current
+    }
+
+    /**
      * Returns the physical cash balance of the treasury in its native currency (minor units).
      * For YER treasuries, this is in YER.
      * For USD/SAR vaults, this returns the native currency balance (debit_foreign - credit_foreign).

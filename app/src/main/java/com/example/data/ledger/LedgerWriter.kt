@@ -30,6 +30,15 @@ import com.example.data.local.entity.JournalLineEntity
 import com.example.data.local.entity.NumberSequenceEntity
 import com.example.data.local.entity.StockMovementEntity
 
+data class InKindAssetItem(
+    val name: String,
+    val quantity: Int = 1,
+    val unitValueMinor: Long,
+    val usefulLifeMonths: Int = 36
+) {
+    val totalMinor: Long get() = unitValueMinor * quantity
+}
+
 class LedgerWriter(
     private val db: AppDatabase,
     private val enableInvariantValidation: Boolean = true
@@ -469,6 +478,106 @@ class LedgerWriter(
         db.assetDao().insertAsset(assetEntity)
 
         recordAuditLog("DOCUMENT", docId, "POST_IN_KIND_CAPITAL", null, "Posted In-Kind Capital Contribution #$docNumber: $assetName")
+        idempotencyKey?.let { db.idempotencyDao().insertKey(IdempotencyKeyEntity(it, docId)) }
+
+        if (enableInvariantValidation) invariants.verifyAll()
+        docEntity
+    }
+
+    /**
+     * Posts a Multi-Asset In-Kind (Fixed Assets) Capital Contribution from a Partner in a single voucher:
+     * DR 1501 (Fixed Assets Network)
+     * CR 3101 (Capital - Partner Equity)
+     * Registers all asset items in the Asset Register and document_items table.
+     */
+    suspend fun postMultiAssetInKindCapitalContribution(
+        partnerPartyId: String,
+        assets: List<InKindAssetItem>,
+        fiscalYear: Int,
+        dateEpochDay: Long,
+        currency: CurrencyCode,
+        exchangeRate: ExchangeRate,
+        notes: String = "",
+        rateZone: RateZone = RateZone.DEFAULT,
+        rateSource: RateSource = RateSource.SYSTEM_DAILY,
+        idempotencyKey: String? = null
+    ): DocumentEntity = db.withTransaction {
+        require(assets.isNotEmpty()) { "يجب إضافة أصل واحد على الأقل" }
+        validatePeriodIsOpen(dateEpochDay)
+        validateExchangeRateGuardrail(currency, exchangeRate)
+        val docNumber = allocateNextDocNumber(DocumentType.RECEIPT_VOUCHER.name, fiscalYear)
+        val docId = UuidUtils.newTimeOrderedId()
+
+        val totalAmountOrigMinor = assets.sumOf { it.totalMinor }
+        val totalBase = exchangeRate.convert(totalAmountOrigMinor)
+        val assetSummary = assets.joinToString("، ") { "${it.name} (عدد ${it.quantity})" }
+
+        val docEntity = DocumentEntity(
+            id = docId,
+            type = DocumentType.RECEIPT_VOUCHER.name,
+            fiscalYear = fiscalYear,
+            docNumber = docNumber,
+            partyId = partnerPartyId,
+            dateEpochDay = dateEpochDay,
+            currency = currency.name,
+            exchangeRateMicros = exchangeRate.rateMicros,
+            rateZone = rateZone.name,
+            rateSource = rateSource.name,
+            totalMinor = totalAmountOrigMinor,
+            totalBaseMinor = totalBase,
+            status = DocumentStatus.POSTED.name,
+            notes = if (notes.isBlank()) "مساهمة عينية رأسمالية متعددة الأصول ($assetSummary)" else notes
+        )
+        db.documentDao().insertDocument(docEntity)
+
+        // Insert document items and asset register entries
+        val docItemEntities = mutableListOf<DocumentItemEntity>()
+        assets.forEachIndexed { index, item ->
+            val itemBaseCost = exchangeRate.convert(item.totalMinor)
+            docItemEntities.add(
+                DocumentItemEntity(
+                    id = UuidUtils.newTimeOrderedId(),
+                    docId = docId,
+                    itemIndex = index,
+                    packageId = null,
+                    description = item.name,
+                    accountCode = AccountConstants.FIXED_ASSETS_NETWORK,
+                    quantity = item.quantity,
+                    unitPriceMinor = item.unitValueMinor,
+                    totalMinor = item.totalMinor,
+                    isAsset = true
+                )
+            )
+
+            // Register asset in Asset Register
+            val assetEntity = AssetEntity(
+                id = UuidUtils.newTimeOrderedId(),
+                docId = docId,
+                name = if (item.quantity > 1) "${item.name} (${item.quantity} وحدات)" else item.name,
+                purchaseDateEpochDay = dateEpochDay,
+                purchaseCostMinor = itemBaseCost,
+                salvageValueMinor = 0L,
+                usefulLifeMonths = item.usefulLifeMonths,
+                accumulatedDepreciationMinor = 0L,
+                isDisposed = false
+            )
+            db.assetDao().insertAsset(assetEntity)
+        }
+        db.documentDao().insertItems(docItemEntities)
+
+        val draft = PostingRules.createInKindCapitalContributionDraft(
+            assetGlCode = AccountConstants.FIXED_ASSETS_NETWORK,
+            targetAccountCode = AccountConstants.CAPITAL,
+            partnerPartyId = partnerPartyId,
+            amountOrigMinor = totalAmountOrigMinor,
+            currency = currency,
+            exchangeRate = exchangeRate,
+            dateEpochDay = dateEpochDay,
+            memo = "مساهمة عينية رأسمالية ($assetSummary) #$docNumber"
+        )
+        persistJournalDraft(docId, docNumber, draft)
+
+        recordAuditLog("DOCUMENT", docId, "POST_IN_KIND_CAPITAL", null, "Posted In-Kind Multi-Asset Capital Contribution #$docNumber ($assetSummary)")
         idempotencyKey?.let { db.idempotencyDao().insertKey(IdempotencyKeyEntity(it, docId)) }
 
         if (enableInvariantValidation) invariants.verifyAll()

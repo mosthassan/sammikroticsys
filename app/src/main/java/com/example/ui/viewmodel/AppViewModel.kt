@@ -20,6 +20,7 @@ import com.example.data.sync.SyncLogItem
 import com.example.data.sync.SyncMetadata
 import com.example.data.sync.SyncState
 import com.example.data.sync.SyncStatus
+import com.example.data.ledger.InKindAssetItem
 import com.example.data.ledger.InvariantCheckResult
 import com.example.data.ledger.InvoiceAllocationSpec
 import com.example.data.ledger.PaymentVoucherType
@@ -592,6 +593,37 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     rateZone = rateZone
                 )
                 _userMessage.emit("تم ترحيل المساهمة العينية وقيد الأصل الثابت بنجاح")
+                refreshDashboard()
+                onSuccess()
+            } catch (e: Exception) {
+                _userMessage.emit("فشل تسجيل المساهمة العينية: ${e.message}")
+            }
+        }
+    }
+
+    fun postMultiAssetInKindCapitalContribution(
+        partnerPartyId: String,
+        assets: List<InKindAssetItem>,
+        currency: CurrencyCode,
+        exchangeRate: ExchangeRate,
+        notes: String,
+        rateZone: RateZone = RateZone.DEFAULT,
+        onSuccess: () -> Unit
+    ) {
+        viewModelScope.launch {
+            try {
+                val now = java.time.LocalDate.now()
+                writer.postMultiAssetInKindCapitalContribution(
+                    partnerPartyId = partnerPartyId,
+                    assets = assets,
+                    fiscalYear = now.year,
+                    dateEpochDay = now.toEpochDay(),
+                    currency = currency,
+                    exchangeRate = exchangeRate,
+                    notes = notes,
+                    rateZone = rateZone
+                )
+                _userMessage.emit("تم ترحيل سند المساهمة العينية متعددة الأصول وقيد الأصول الثابتة بنجاح")
                 refreshDashboard()
                 onSuccess()
             } catch (e: Exception) {
