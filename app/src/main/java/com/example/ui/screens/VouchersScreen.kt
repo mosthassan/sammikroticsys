@@ -717,7 +717,6 @@ fun VoucherCreationBottomSheet(
 ) {
     var voucherMode by remember { mutableIntStateOf(initialTab) } // 0: Receipt, 1: Payment
     val isReceipt = voucherMode == 0
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     val context = androidx.compose.ui.platform.LocalContext.current
     val effectiveConfig = networkConfig ?: remember {
@@ -742,6 +741,18 @@ fun VoucherCreationBottomSheet(
     var selectedTreasuryId by remember { mutableStateOf(treasuries.firstOrNull()?.id ?: "TR_MAIN_YER") }
     var amountText by remember { mutableStateOf("") }
     var notes by remember { mutableStateOf("") }
+
+    val hasEnteredData = amountText.isNotBlank() || notes.isNotBlank()
+    val sheetState = rememberModalBottomSheetState(
+        skipPartiallyExpanded = true,
+        confirmValueChange = { newState ->
+            if (hasEnteredData && newState == androidx.compose.material3.SheetValue.Hidden) {
+                false
+            } else {
+                true
+            }
+        }
+    )
 
     var partyDropdownExpanded by remember { mutableStateOf(false) }
     var treasuryDropdownExpanded by remember { mutableStateOf(false) }

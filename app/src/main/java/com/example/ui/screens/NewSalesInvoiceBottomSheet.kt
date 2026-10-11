@@ -172,9 +172,21 @@ fun NewSalesInvoiceBottomSheet(
 
     val scrollState = rememberScrollState()
 
+    val hasEnteredData = itemDrafts.any { it.description.isNotBlank() || (it.quantityText.toIntOrNull() ?: 0) > 1 || it.unitPriceText.isNotBlank() } || invoiceNotes.isNotBlank()
+    val sheetState = rememberModalBottomSheetState(
+        skipPartiallyExpanded = true,
+        confirmValueChange = { newState ->
+            if (hasEnteredData && newState == androidx.compose.material3.SheetValue.Hidden) {
+                false
+            } else {
+                true
+            }
+        }
+    )
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetState = sheetState,
         containerColor = CyberDarkCanvas,
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
     ) {

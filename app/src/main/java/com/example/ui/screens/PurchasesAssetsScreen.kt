@@ -53,6 +53,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -800,8 +802,21 @@ fun NewPurchaseBottomSheet(
         effectiveRate.convert(totalForeignMinor)
     }
 
+    val hasEnteredData = itemsList.isNotEmpty() || itemDesc.isNotBlank() || notes.isNotBlank()
+    val sheetState = rememberModalBottomSheetState(
+        skipPartiallyExpanded = true,
+        confirmValueChange = { newState ->
+            if (hasEnteredData && newState == SheetValue.Hidden) {
+                false
+            } else {
+                true
+            }
+        }
+    )
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
+        sheetState = sheetState,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
         containerColor = CyberDarkCanvas,
         dragHandle = {
