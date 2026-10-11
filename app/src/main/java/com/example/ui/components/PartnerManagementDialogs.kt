@@ -505,7 +505,7 @@ fun NewCapitalContributionDialog(
         com.example.data.network.NetworkRepository(context).config.value
     }
     val effectiveResolver = resolver ?: remember { ExchangeRateResolver(AppDatabase.getInstance(context)) }
-    val today = remember { java.time.LocalDate.now().toEpochDay() }
+    val today = remember { com.example.core.time.AppClock.todayEpochDay() }
     val inheritedZone = effectiveConfig.rateZone
     var selectedZone by rememberSaveable(inheritedZone) { mutableStateOf(inheritedZone) }
     var contributionType by remember { mutableIntStateOf(0) } // 0: Cash, 1: In-Kind Asset

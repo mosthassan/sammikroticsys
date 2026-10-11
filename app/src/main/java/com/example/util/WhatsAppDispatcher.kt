@@ -263,7 +263,7 @@ object WhatsAppDispatcher {
             }
             append("━━━━━━━━━━━━━━━━━━━━\n")
             append("*الرصيد الجاري المستحق: $closingBalanceText*\n")
-            append("تاريخ الإشعار: ${java.time.LocalDate.now()}\n")
+            append("تاريخ الإشعار: ${com.example.core.time.AppClock.todayLocalDate()}\n")
             append("نسعد دائماً بخدمتكم.")
         }
 

@@ -25,7 +25,7 @@ import kotlinx.coroutines.flow.Flow
 class AccountingRepository(
     private val db: AppDatabase
 ) {
-    val ledgerWriter = LedgerWriter(db, enableInvariantValidation = true)
+    val ledgerWriter = LedgerWriter(db)
     val invariants = LedgerInvariants(db)
 
     val trialBalance: Flow<List<AccountBalanceRow>> = db.journalDao().getTrialBalanceFlow()

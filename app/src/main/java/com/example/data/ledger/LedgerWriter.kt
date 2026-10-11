@@ -41,9 +41,9 @@ data class InKindAssetItem(
 
 class LedgerWriter(
     private val db: AppDatabase,
-    private val enableInvariantValidation: Boolean = true
+    val enableInvariantValidation: Boolean = com.example.BuildConfig.DEBUG
 ) {
-    private val invariants = LedgerInvariants(db)
+    val invariants = LedgerInvariants(db)
 
     /**
      * Enforces the Zero-Overdraft Invariant (B.1):
@@ -81,12 +81,27 @@ class LedgerWriter(
         idempotencyKey?.let { key ->
             val existingDocId = db.idempotencyDao().getDocIdForKey(key)
             if (existingDocId != null) {
-                return@withTransaction db.documentDao().getDocumentById(existingDocId)!!
+                val existing = db.documentDao().getDocumentById(existingDocId)
+                if (existing != null) return@withTransaction existing
             }
         }
 
         validatePeriodIsOpen(dateEpochDay)
         validateExchangeRateGuardrail(currency, exchangeRate)
+
+        // Stock inventory protection check: reject selling quantities exceeding available inventory (unless explicitly allowed)
+        val org = db.organizationDao().getOrganizationSync()
+        val allowNegative = org?.allowNegativeStock ?: false
+        if (!allowNegative) {
+            cardItems.forEach { item ->
+                item.packageId?.let { pkgId ->
+                    val available = db.cardPackageDao().getStockBalance(pkgId)
+                    if (available < item.quantity) {
+                        error("Cannot sell ${item.quantity} cards of package $pkgId: available stock is only $available")
+                    }
+                }
+            }
+        }
 
         val cardTotalOrig = cardItems.sumOf { it.quantity * it.unitPriceMinor }
         val serviceTotalOrig = serviceItems.sumOf { it.quantity * it.unitPriceMinor }
@@ -206,7 +221,8 @@ class LedgerWriter(
         idempotencyKey?.let { key ->
             val existingDocId = db.idempotencyDao().getDocIdForKey(key)
             if (existingDocId != null) {
-                return@withTransaction db.documentDao().getDocumentById(existingDocId)!!
+                val existing = db.documentDao().getDocumentById(existingDocId)
+                if (existing != null) return@withTransaction existing
             }
         }
 
@@ -263,27 +279,43 @@ class LedgerWriter(
 
         // Check if there are allocations with FX differences
         if (allocations.isNotEmpty()) {
-            val firstAlloc = allocations.first()
-            val invDoc = db.documentDao().getDocumentById(firstAlloc.invoiceDocId)
-            val invCurrency = if (invDoc != null) CurrencyCode.fromString(invDoc.currency) else currency
-            val invRate = if (invDoc != null) ExchangeRate(invCurrency, CurrencyCode.FUNCTIONAL, invDoc.exchangeRateMicros) else exchangeRate
-            val totalRelievedOrig = allocations.sumOf { it.allocatedOrigMinor }
-            val cashReceivedBase = exchangeRate.convert(amountOrigMinor)
-            val receivableRelievedBase = invRate.convert(totalRelievedOrig)
+            val allocationReliefs = allocations.map { alloc ->
+                val invDoc = db.documentDao().getDocumentById(alloc.invoiceDocId)
+                    ?: error("Allocated invoice ${alloc.invoiceDocId} not found")
+                val invCurrency = CurrencyCode.fromString(invDoc.currency)
+                val invRate = ExchangeRate(invCurrency, CurrencyCode.FUNCTIONAL, invDoc.exchangeRateMicros)
+                val receivableRelievedBase = invRate.convert(alloc.allocatedOrigMinor)
+                com.example.core.ledger.AllocationReliefItem(
+                    invoiceDocId = alloc.invoiceDocId,
+                    invoiceDocNumber = invDoc.docNumber,
+                    allocatedOrigMinor = alloc.allocatedOrigMinor,
+                    invoiceCurrency = invCurrency,
+                    invoiceRate = invRate,
+                    receivableRelievedBaseMinor = receivableRelievedBase
+                )
+            }
 
-            if (invDoc != null && (cashReceivedBase != receivableRelievedBase || invCurrency != currency)) {
-                val draft = PostingRules.createCustomerReceiptWithFxDraft(
+            val totalRelievedOrig = allocations.sumOf { it.allocatedOrigMinor }
+            val unallocatedOrig = amountOrigMinor - totalRelievedOrig
+            val totalReceivableRelievedBase = allocationReliefs.sumOf { it.receivableRelievedBaseMinor }
+            val cashReceivedBase = exchangeRate.convert(amountOrigMinor)
+            val unallocatedBase = if (unallocatedOrig > 0L) exchangeRate.convert(unallocatedOrig) else 0L
+
+            val hasFxDifference = allocationReliefs.any { it.invoiceRate.rateMicros != exchangeRate.rateMicros || it.invoiceCurrency != currency } ||
+                    (cashReceivedBase != totalReceivableRelievedBase + unallocatedBase)
+
+            if (hasFxDifference) {
+                val draft = PostingRules.createCustomerReceiptWithMultiAllocFxDraft(
                     treasuryGlCode = treasury.glAccountCode,
                     treasuryId = treasuryId,
                     partyId = partyId,
                     amountOrigMinor = amountOrigMinor,
                     currency = currency,
                     settlementRate = exchangeRate,
-                    invoiceRate = invRate,
+                    allocationReliefs = allocationReliefs,
+                    unallocatedOrigMinor = unallocatedOrig,
                     dateEpochDay = dateEpochDay,
-                    memo = "سند قبض عميل #$docNumber (مع تسوية فروق صرف)",
-                    invoiceCurrency = invCurrency,
-                    invoiceRelievedOrigMinor = totalRelievedOrig
+                    memo = "سند قبض عميل #$docNumber (مع تسوية فروق صرف)"
                 )
                 persistJournalDraft(docId, docNumber, draft)
             } else {
@@ -709,7 +741,8 @@ class LedgerWriter(
         idempotencyKey?.let { key ->
             val existingDocId = db.idempotencyDao().getDocIdForKey(key)
             if (existingDocId != null) {
-                return@withTransaction db.documentDao().getDocumentById(existingDocId)!!
+                val existing = db.documentDao().getDocumentById(existingDocId)
+                if (existing != null) return@withTransaction existing
             }
         }
 
@@ -1009,7 +1042,8 @@ class LedgerWriter(
         idempotencyKey?.let { key ->
             val existingDocId = db.idempotencyDao().getDocIdForKey(key)
             if (existingDocId != null) {
-                return@withTransaction db.documentDao().getDocumentById(existingDocId)!!
+                val existing = db.documentDao().getDocumentById(existingDocId)
+                if (existing != null) return@withTransaction existing
             }
         }
 
@@ -1352,7 +1386,7 @@ class LedgerWriter(
         )
 
         // Persist reversal entry with the next sequence entry number
-        persistJournalDraft(docId, doc.docNumber, reversalDraft)
+        persistJournalDraft(docId, doc.docNumber, reversalDraft, reversalOfEntryId = normalEntry.id)
 
         // Update document status to VOIDED
         val updatedDoc = doc.copy(status = DocumentStatus.VOIDED.name)
@@ -1387,7 +1421,7 @@ class LedgerWriter(
                             reversalDateEpochDay = reversalDateEpochDay,
                             reversalMemo = "قيد عكسي لسند الصرف #${paymentDoc.docNumber} لإلغاء فاتورة المشتريات #${doc.docNumber}: $reason"
                         )
-                        persistJournalDraft(paymentDoc.id, paymentDoc.docNumber, payReversalDraft)
+                        persistJournalDraft(paymentDoc.id, paymentDoc.docNumber, payReversalDraft, reversalOfEntryId = payNormalEntry.id)
                         db.documentDao().updateDocument(paymentDoc.copy(status = DocumentStatus.VOIDED.name))
                         recordAuditLog("DOCUMENT", paymentDoc.id, "VOID", paymentDoc.status, "Voided payment voucher #${paymentDoc.docNumber} linked to voided purchase invoice #${doc.docNumber}")
                     }
@@ -1446,6 +1480,161 @@ class LedgerWriter(
         recordAuditLog("DOCUMENT", docId, "VOID", doc.status, "Voided: $reason")
         if (enableInvariantValidation) invariants.verifyAll()
         true
+    }
+
+    /**
+     * Amends an already POSTED sales invoice:
+     * 1. Reverses original document via a full REVERSAL entry and marks original doc as VOIDED.
+     * 2. Reverses any stock movements.
+     * 3. Creates the amended document with incremented revision (originalDoc.revision + 1)
+     *    and linked reversalOfDocId pointing to originalDocId.
+     * 4. Enforces negative stock guardrail for the new items.
+     * 5. Posts the new normal journal entry.
+     * 6. Everything executed atomically within a single database transaction.
+     */
+    suspend fun amendSalesInvoice(
+        originalDocId: String,
+        newDateEpochDay: Long,
+        newExchangeRate: ExchangeRate,
+        newCardItems: List<SalesItemSpec>,
+        newServiceItems: List<SalesItemSpec>,
+        newNotes: String,
+        reason: String
+    ): DocumentEntity = db.withTransaction {
+        val originalDoc = db.documentDao().getDocumentById(originalDocId)
+            ?: error("Original document $originalDocId not found")
+        require(originalDoc.status == DocumentStatus.POSTED.name) {
+            "Can only amend POSTED documents (current status: ${originalDoc.status})"
+        }
+
+        // 1. Void the original document (generates REVERSAL entry and reverses stock movements)
+        val voidSuccess = voidDocument(
+            docId = originalDocId,
+            reversalDateEpochDay = newDateEpochDay,
+            reason = "تعديل المستند: $reason"
+        )
+        check(voidSuccess) { "Failed to void original document $originalDocId during amendment" }
+
+        // 2. Validate period and exchange rates for new document
+        validatePeriodIsOpen(newDateEpochDay)
+        val currency = CurrencyCode.fromString(originalDoc.currency)
+        validateExchangeRateGuardrail(currency, newExchangeRate)
+
+        // 3. Stock inventory protection check for new items
+        val org = db.organizationDao().getOrganizationSync()
+        val allowNegative = org?.allowNegativeStock ?: false
+        if (!allowNegative) {
+            newCardItems.forEach { item ->
+                item.packageId?.let { pkgId ->
+                    val available = db.cardPackageDao().getStockBalance(pkgId)
+                    if (available < item.quantity) {
+                        error("Cannot sell ${item.quantity} cards of package $pkgId: available stock is only $available")
+                    }
+                }
+            }
+        }
+
+        val cardTotalOrig = newCardItems.sumOf { it.quantity * it.unitPriceMinor }
+        val serviceTotalOrig = newServiceItems.sumOf { it.quantity * it.unitPriceMinor }
+        val totalOrig = cardTotalOrig + serviceTotalOrig
+        val totalBase = newExchangeRate.convert(totalOrig)
+
+        val fiscalYear = com.example.core.time.FiscalCalendar.DEFAULT.fiscalYearOf(newDateEpochDay)
+        val docNumber = allocateNextDocNumber(DocumentType.SALES_INVOICE.name, fiscalYear)
+        val newDocId = UuidUtils.newTimeOrderedId()
+
+        val amendedDocEntity = DocumentEntity(
+            id = newDocId,
+            type = DocumentType.SALES_INVOICE.name,
+            fiscalYear = fiscalYear,
+            docNumber = docNumber,
+            partyId = originalDoc.partyId,
+            dateEpochDay = newDateEpochDay,
+            currency = originalDoc.currency,
+            exchangeRateMicros = newExchangeRate.rateMicros,
+            rateZone = originalDoc.rateZone,
+            rateSource = originalDoc.rateSource,
+            totalMinor = totalOrig,
+            totalBaseMinor = totalBase,
+            status = DocumentStatus.POSTED.name,
+            notes = newNotes,
+            reversalOfDocId = originalDocId,
+            revision = originalDoc.revision + 1
+        )
+        db.documentDao().insertDocument(amendedDocEntity)
+
+        // 4. Insert items
+        val allItems = mutableListOf<DocumentItemEntity>()
+        var itemIdx = 0
+        newCardItems.forEach { item ->
+            allItems.add(
+                DocumentItemEntity(
+                    id = UuidUtils.newTimeOrderedId(),
+                    docId = newDocId,
+                    itemIndex = itemIdx++,
+                    packageId = item.packageId,
+                    description = item.description,
+                    accountCode = AccountConstants.CARD_SALES_REVENUE,
+                    quantity = item.quantity,
+                    unitPriceMinor = item.unitPriceMinor,
+                    totalMinor = item.quantity * item.unitPriceMinor,
+                    isAsset = false
+                )
+            )
+            item.packageId?.let { pkgId ->
+                db.cardPackageDao().insertStockMovement(
+                    StockMovementEntity(
+                        id = UuidUtils.newTimeOrderedId(),
+                        packageId = pkgId,
+                        docId = newDocId,
+                        type = "SELL",
+                        quantity = item.quantity,
+                        movementDateEpochDay = newDateEpochDay
+                    )
+                )
+            }
+        }
+
+        newServiceItems.forEach { item ->
+            allItems.add(
+                DocumentItemEntity(
+                    id = UuidUtils.newTimeOrderedId(),
+                    docId = newDocId,
+                    itemIndex = itemIdx++,
+                    packageId = null,
+                    description = item.description,
+                    accountCode = AccountConstants.DIRECT_SERVICE_REVENUE,
+                    quantity = item.quantity,
+                    unitPriceMinor = item.unitPriceMinor,
+                    totalMinor = item.quantity * item.unitPriceMinor,
+                    isAsset = false
+                )
+            )
+        }
+        db.documentDao().insertItems(allItems)
+
+        // 5. Post normal journal entry
+        val draft = PostingRules.createSalesInvoiceDraft(
+            partyId = originalDoc.partyId,
+            cardTotalOrigMinor = cardTotalOrig,
+            serviceTotalOrigMinor = serviceTotalOrig,
+            currency = currency,
+            exchangeRate = newExchangeRate,
+            dateEpochDay = newDateEpochDay,
+            memo = "فاتورة مبيعات معدلة #${docNumber} (مراجعة ${amendedDocEntity.revision}) بديلة عن #${originalDoc.docNumber}: $newNotes"
+        )
+        persistJournalDraft(newDocId, docNumber, draft)
+
+        recordAuditLog(
+            entityType = "DOCUMENT",
+            entityId = newDocId,
+            action = "AMEND_DOCUMENT",
+            before = "Doc ${originalDoc.type} #${originalDoc.docNumber} (rev ${originalDoc.revision})",
+            after = "Amended as #${docNumber} (rev ${amendedDocEntity.revision})"
+        )
+
+        if (enableInvariantValidation) invariants.verifyAll()
+        amendedDocEntity
     }
 
     /**
@@ -1792,27 +1981,30 @@ class LedgerWriter(
 
         // Read all 4xxx and 5xxx net balances
         val accounts = db.accountDao().getAllAccountsSync()
-        val revenueBalances = mutableMapOf<String, Long>()
-        val expenseBalances = mutableMapOf<String, Long>()
+        val netBalances = mutableMapOf<String, Long>()
 
-        accounts.forEach { acc ->
+        accounts.filter { it.code.startsWith("4") || it.code.startsWith("5") }.forEach { acc ->
             val netDebit = db.journalDao().getNetDebitBalanceForAccount(acc.code)
-            if (acc.code.startsWith("4")) {
-                // Revenue has credit normal: credit balance = -netDebit
-                val creditBal = -netDebit
-                if (creditBal > 0L) revenueBalances[acc.code] = creditBal
-            } else if (acc.code.startsWith("5")) {
-                // Expense has debit normal: debit balance = netDebit
-                if (netDebit > 0L) expenseBalances[acc.code] = netDebit
+            if (netDebit != 0L) {
+                netBalances[acc.code] = netDebit
             }
         }
 
-        val draft = PostingRules.createClosingDraft(
-            revenueBalances = revenueBalances,
-            expenseBalances = expenseBalances,
-            dateEpochDay = closingDateEpochDay,
-            memo = if (memo.isBlank()) "قيد إقفال سنوي للسنة المالية $fiscalYear" else memo
-        )
+        val draft = if (netBalances.isNotEmpty()) {
+            PostingRules.createClosingDraftFromNetBalances(
+                netBalances = netBalances,
+                dateEpochDay = closingDateEpochDay,
+                memo = if (memo.isBlank()) "قيد إقفال سنوي للسنة المالية $fiscalYear" else memo
+            )
+        } else {
+            // If already zero, create balanced 0 draft or memo entry
+            PostingRules.createClosingDraft(
+                revenueBalances = emptyMap(),
+                expenseBalances = emptyMap(),
+                dateEpochDay = closingDateEpochDay,
+                memo = if (memo.isBlank()) "قيد إقفال سنوي للسنة المالية $fiscalYear" else memo
+            )
+        }
 
         val docNumber = allocateNextDocNumber(DocumentType.CLOSING_ENTRY.name, fiscalYear)
         val docId = UuidUtils.newTimeOrderedId()
@@ -1945,19 +2137,22 @@ class LedgerWriter(
 
     private suspend fun persistJournalDraft(
         docId: String,
-        entryNumber: Long,
-        draft: JournalDraft
+        entryNumber: Long? = null,
+        draft: JournalDraft,
+        reversalOfEntryId: String? = null
     ): String {
         draft.assertBalanced()
         val entryId = UuidUtils.newTimeOrderedId()
+        val actualEntryNumber = allocateNextDocNumber("JOURNAL_ENTRY", 0)
 
         val entryEntity = JournalEntryEntity(
             id = entryId,
             docId = docId,
-            entryNumber = entryNumber,
+            entryNumber = actualEntryNumber,
             entryDateEpochDay = draft.entryDateEpochDay,
             type = draft.type.name,
-            memo = draft.memo
+            memo = draft.memo,
+            reversalOfEntryId = reversalOfEntryId
         )
         db.journalDao().insertEntry(entryEntity)
 
@@ -1978,6 +2173,7 @@ class LedgerWriter(
             )
         }
         db.journalDao().insertLines(lineEntities)
+        invariants.verifyEntry(entryId)
         return entryId
     }
 

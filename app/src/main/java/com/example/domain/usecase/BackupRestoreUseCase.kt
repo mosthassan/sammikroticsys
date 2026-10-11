@@ -51,6 +51,8 @@ class BackupRestoreUseCase(
             orgObj.put("isInitialized", org.isInitialized)
             orgObj.put("primaryRateZone", org.primaryRateZone)
             orgObj.put("equityShareMode", org.equityShareMode)
+            orgObj.put("allowNegativeStock", org.allowNegativeStock)
+            orgObj.put("timeZone", org.timeZone)
             orgObj.put("createdAt", org.createdAt)
             root.put("organization", orgObj)
         }
@@ -120,6 +122,7 @@ class BackupRestoreUseCase(
             obj.put("status", d.status)
             obj.put("notes", d.notes)
             obj.put("reversalOfDocId", d.reversalOfDocId)
+            obj.put("revision", d.revision)
             obj.put("createdAt", d.createdAt)
             docsArr.put(obj)
         }
@@ -153,6 +156,7 @@ class BackupRestoreUseCase(
             obj.put("entryDateEpochDay", je.entryDateEpochDay)
             obj.put("type", je.type)
             obj.put("memo", je.memo)
+            obj.put("reversalOfEntryId", je.reversalOfEntryId)
             obj.put("createdAt", je.createdAt)
             entriesArr.put(obj)
         }
@@ -382,8 +386,8 @@ class BackupRestoreUseCase(
                 sdb.execSQL("DELETE FROM organizations")
                 val orgStmt = sdb.compileStatement("""
                     INSERT OR REPLACE INTO organizations 
-                    (id, name, taxNumber, functionalCurrency, fiscalYearStartMonth, isInitialized, primaryRateZone, equityShareMode, createdAt)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, name, taxNumber, functionalCurrency, fiscalYearStartMonth, isInitialized, primaryRateZone, equityShareMode, allowNegativeStock, timeZone, createdAt)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """.trimIndent())
                 orgStmt.bindString(1, orgObj.getString("id"))
                 orgStmt.bindString(2, orgObj.getString("name"))
@@ -393,7 +397,9 @@ class BackupRestoreUseCase(
                 orgStmt.bindLong(6, if (orgObj.optBoolean("isInitialized", true)) 1L else 0L)
                 orgStmt.bindString(7, orgObj.optString("primaryRateZone", "SANAA"))
                 orgStmt.bindString(8, orgObj.optString("equityShareMode", "DERIVED_FROM_CAPITAL"))
-                orgStmt.bindLong(9, orgObj.optLong("createdAt", System.currentTimeMillis()))
+                orgStmt.bindLong(9, if (orgObj.optBoolean("allowNegativeStock", false)) 1L else 0L)
+                orgStmt.bindString(10, orgObj.optString("timeZone", "Asia/Aden"))
+                orgStmt.bindLong(11, orgObj.optLong("createdAt", System.currentTimeMillis()))
                 orgStmt.executeInsert()
                 orgStmt.close()
             }
@@ -466,8 +472,8 @@ class BackupRestoreUseCase(
             val docsArr = root.optJSONArray("documents") ?: JSONArray()
             val docStmt = sdb.compileStatement("""
                 INSERT INTO documents 
-                (id, type, fiscalYear, docNumber, partyId, dateEpochDay, currency, exchangeRateMicros, rateZone, rateSource, totalMinor, totalBaseMinor, status, notes, reversalOfDocId, createdAt)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, type, fiscalYear, docNumber, partyId, dateEpochDay, currency, exchangeRateMicros, rateZone, rateSource, totalMinor, totalBaseMinor, status, notes, reversalOfDocId, revision, createdAt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """.trimIndent())
             for (i in 0 until docsArr.length()) {
                 val d = docsArr.getJSONObject(i)
@@ -487,7 +493,8 @@ class BackupRestoreUseCase(
                 docStmt.bindString(13, d.getString("status"))
                 docStmt.bindString(14, d.optString("notes", ""))
                 if (d.isNull("reversalOfDocId")) docStmt.bindNull(15) else docStmt.bindString(15, d.getString("reversalOfDocId"))
-                docStmt.bindLong(16, d.optLong("createdAt", System.currentTimeMillis()))
+                docStmt.bindLong(16, d.optLong("revision", 0L))
+                docStmt.bindLong(17, d.optLong("createdAt", System.currentTimeMillis()))
                 docStmt.executeInsert()
             }
             docStmt.close()
@@ -520,8 +527,8 @@ class BackupRestoreUseCase(
             val entriesArr = root.optJSONArray("journal_entries") ?: JSONArray()
             val entryStmt = sdb.compileStatement("""
                 INSERT INTO journal_entries 
-                (id, docId, entryNumber, entryDateEpochDay, type, memo, createdAt)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (id, docId, entryNumber, entryDateEpochDay, type, memo, reversalOfEntryId, createdAt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """.trimIndent())
             for (i in 0 until entriesArr.length()) {
                 val je = entriesArr.getJSONObject(i)
@@ -532,7 +539,8 @@ class BackupRestoreUseCase(
                 entryStmt.bindLong(4, je.getLong("entryDateEpochDay"))
                 entryStmt.bindString(5, je.getString("type"))
                 entryStmt.bindString(6, je.getString("memo"))
-                entryStmt.bindLong(7, je.optLong("createdAt", System.currentTimeMillis()))
+                if (je.isNull("reversalOfEntryId")) entryStmt.bindNull(7) else entryStmt.bindString(7, je.getString("reversalOfEntryId"))
+                entryStmt.bindLong(8, je.optLong("createdAt", System.currentTimeMillis()))
                 entryStmt.executeInsert()
             }
             entryStmt.close()

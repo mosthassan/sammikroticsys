@@ -49,6 +49,14 @@ data class PartyBalanceRow(
     val netBalanceMinor: Long get() = totalDebitMinor - totalCreditMinor
 }
 
+data class AccountPeriodBalance(
+    val accountCode: String,
+    val totalDebitMinor: Long,
+    val totalCreditMinor: Long
+) {
+    val netDebitMinor: Long get() = totalDebitMinor - totalCreditMinor
+}
+
 data class StatementLineRow(
     val entryId: String,
     val docId: String,
@@ -121,6 +129,35 @@ internal interface JournalDao {
 
     @Query("SELECT * FROM journal_entries WHERE docId = :docId ORDER BY entryNumber ASC")
     suspend fun getEntriesForDocument(docId: String): List<JournalEntryEntity>
+
+    @Query("SELECT * FROM journal_entries WHERE id = :entryId")
+    suspend fun getEntryById(entryId: String): JournalEntryEntity?
+
+    @Query("""
+        SELECT jl.accountCode AS accountCode,
+               COALESCE(SUM(jl.baseDebitMinor), 0) AS totalDebitMinor,
+               COALESCE(SUM(jl.baseCreditMinor), 0) AS totalCreditMinor
+        FROM journal_lines jl
+        INNER JOIN journal_entries je ON jl.entryId = je.id
+        WHERE (jl.accountCode LIKE '4%' OR jl.accountCode LIKE '5%')
+          AND je.type != 'CLOSING'
+          AND je.entryDateEpochDay >= :startDateEpochDay
+          AND je.entryDateEpochDay <= :endDateEpochDay
+        GROUP BY jl.accountCode
+    """)
+    suspend fun getNominalAccountBalancesForPeriod(
+        startDateEpochDay: Long,
+        endDateEpochDay: Long
+    ): List<AccountPeriodBalance>
+
+    @Query("""
+        SELECT COALESCE(SUM(jl.baseCreditMinor) - SUM(jl.baseDebitMinor), 0)
+        FROM journal_lines jl
+        INNER JOIN journal_entries je ON jl.entryId = je.id
+        WHERE (jl.accountCode LIKE '4%' OR jl.accountCode LIKE '5%')
+          AND (:asOfDateEpochDay IS NULL OR je.entryDateEpochDay <= :asOfDateEpochDay)
+    """)
+    suspend fun getUnclosedNominalBalance(asOfDateEpochDay: Long?): Long
 
     @Query("SELECT * FROM journal_lines WHERE entryId = :entryId ORDER BY lineNo ASC")
     suspend fun getLinesForEntry(entryId: String): List<JournalLineEntity>
@@ -417,6 +454,15 @@ interface DocumentDao {
     @Query("SELECT * FROM document_items WHERE docId = :docId ORDER BY itemIndex ASC")
     suspend fun getItemsForDocument(docId: String): List<DocumentItemEntity>
 
+    @Query("DELETE FROM document_items WHERE docId = :docId")
+    suspend fun deleteItemsForDoc(docId: String)
+
+    @Query("SELECT COUNT(*) FROM documents WHERE fiscalYear = :fiscalYear AND status = 'DRAFT'")
+    suspend fun getUnpostedDocumentsCountForYear(fiscalYear: Int): Int
+
+    @Query("SELECT * FROM documents WHERE type = :type AND fiscalYear = :fiscalYear")
+    suspend fun getDocumentsByTypeAndYear(type: String, fiscalYear: Int): List<DocumentEntity>
+
     @Query("SELECT * FROM document_items")
     suspend fun getAllDocumentItemsSync(): List<DocumentItemEntity>
 }
@@ -506,6 +552,9 @@ interface FiscalPeriodDao {
 
     @Query("UPDATE fiscal_periods SET isClosed = :isClosed, closedAt = :closedAt WHERE year = :year AND month = :month")
     suspend fun setPeriodClosed(year: Int, month: Int, isClosed: Boolean, closedAt: Long?)
+
+    @Query("SELECT * FROM fiscal_periods WHERE isClosed = 1")
+    suspend fun getClosedPeriods(): List<FiscalPeriodEntity>
 }
 
 @Dao
@@ -554,6 +603,12 @@ interface AssetDao {
 
     @Query("DELETE FROM assets WHERE docId = :docId")
     suspend fun deleteAssetsByDocId(docId: String)
+
+    @Query("SELECT * FROM assets WHERE docId = :docId")
+    suspend fun getAssetsForDoc(docId: String): List<AssetEntity>
+
+    @Query("SELECT * FROM depreciation_runs WHERE assetId = :assetId")
+    suspend fun getDepreciationRunsForAsset(assetId: String): List<DepreciationRunEntity>
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertDepreciationRun(run: DepreciationRunEntity)
@@ -672,6 +727,9 @@ interface AuditLogDao {
 interface IdempotencyDao {
     @Query("SELECT docId FROM idempotency_keys WHERE `key` = :key")
     suspend fun getDocIdForKey(key: String): String?
+
+    @Query("DELETE FROM idempotency_keys")
+    suspend fun clearAllKeys()
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertKey(entry: IdempotencyKeyEntity)

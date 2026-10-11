@@ -70,7 +70,8 @@ data class BalanceSheetReport(
     val totalEquityMinor: Long,
     val totalLiabilitiesAndEquityMinor: Long,
     val isBalanced: Boolean,
-    val lineDetails: List<BalanceSheetRow>
+    val lineDetails: List<BalanceSheetRow>,
+    val unclosedProfitMinor: Long = currentPeriodNetProfitMinor
 )
 
 data class AgingBucket(
@@ -196,9 +197,7 @@ class FinancialStatementsUseCase(private val db: AppDatabase) {
 
     suspend fun generateBalanceSheet(asOfDateEpochDay: Long): BalanceSheetReport {
         val rows = db.journalDao().getBalanceSheetLines(asOfDateEpochDay)
-        val asOfDate = java.time.LocalDate.ofEpochDay(asOfDateEpochDay)
-        val startOfFiscalYearEpochDay = java.time.LocalDate.of(asOfDate.year, 1, 1).toEpochDay()
-        val incomeReport = generateIncomeStatement(startDateEpochDay = startOfFiscalYearEpochDay, endDateEpochDay = asOfDateEpochDay)
+        val unclosedProfit = db.journalDao().getUnclosedNominalBalance(asOfDateEpochDay)
 
         var cashVault = 0L
         var banksWallets = 0L
@@ -237,8 +236,8 @@ class FinancialStatementsUseCase(private val db: AppDatabase) {
         val currentLiabilities = payables + otherLiabilities
         val totalLiabilities = currentLiabilities
 
-        val currentPeriodProfit = incomeReport.netProfitMinor
-        val totalEquity = capital + partnerCurrent + retainedEarnings + currentPeriodProfit
+        val currentPeriodProfit = unclosedProfit
+        val totalEquity = capital + partnerCurrent + retainedEarnings + unclosedProfit
         val totalLiabAndEquity = totalLiabilities + totalEquity
 
         return BalanceSheetReport(
@@ -257,7 +256,8 @@ class FinancialStatementsUseCase(private val db: AppDatabase) {
             totalEquityMinor = totalEquity,
             totalLiabilitiesAndEquityMinor = totalLiabAndEquity,
             isBalanced = (totalAssets == totalLiabAndEquity),
-            lineDetails = rows
+            lineDetails = rows,
+            unclosedProfitMinor = unclosedProfit
         )
     }
 

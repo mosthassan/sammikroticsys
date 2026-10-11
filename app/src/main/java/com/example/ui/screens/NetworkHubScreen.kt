@@ -123,6 +123,7 @@ import kotlinx.coroutines.launch
 fun NetworkHubScreen(
     networkRepository: NetworkRepository,
     viewModel: AppViewModel? = null,
+    initialTab: Int = 0,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -131,7 +132,7 @@ fun NetworkHubScreen(
     val devices by networkRepository.devices.collectAsState()
     val subnets by networkRepository.subnets.collectAsState()
 
-    var activeTab by remember { mutableStateOf(0) } // 0: Identity/Config, 1: Security, 2: Devices, 3: Subnets, 4: Rates Hub
+    var activeTab by remember(initialTab) { mutableStateOf(initialTab) } // 0: Identity/Config, 1: Security, 2: Devices, 3: Subnets, 4: Rates Hub, 5: WiFi Spectrum
     var showDeviceBackupDialog by remember { mutableStateOf(false) }
     var deviceToEdit by remember { mutableStateOf<NetworkDevice?>(null) }
     var isCloningDevice by remember { mutableStateOf(false) }
@@ -192,6 +193,13 @@ fun NetworkHubScreen(
                 onClick = { activeTab = 4 },
                 modifier = Modifier.width(105.dp)
             )
+            HubTabItem(
+                label = "طيف وقنوات WiFi",
+                icon = Icons.Default.WifiTethering,
+                isSelected = activeTab == 5,
+                onClick = { activeTab = 5 },
+                modifier = Modifier.width(125.dp)
+            )
         }
 
         Spacer(modifier = Modifier.height(14.dp))
@@ -204,7 +212,7 @@ fun NetworkHubScreen(
                     onSave = { updated ->
                         scope.launch {
                             networkRepository.saveConfig(updated)
-                            val today = java.time.LocalDate.now().toEpochDay()
+                            val today = com.example.core.time.AppClock.todayEpochDay()
                             viewModel?.addExchangeRate(
                                 currency = CurrencyCode.USD,
                                 zone = updated.rateZone,
@@ -257,6 +265,7 @@ fun NetworkHubScreen(
                 4 -> RatesHubTab(
                     viewModel = viewModel
                 )
+                5 -> com.example.ui.wifi.WifiSpectrumScreen()
             }
         }
     }
@@ -1292,7 +1301,7 @@ private fun RatesHubTab(
 ) {
     val org by (viewModel?.organization ?: remember { MutableStateFlow(null) }).collectAsState()
     val allRates by (viewModel?.allRates ?: remember { MutableStateFlow(emptyList()) }).collectAsState()
-    val todayEpoch = remember { java.time.LocalDate.now().toEpochDay() }
+    val todayEpoch = remember { com.example.core.time.AppClock.todayEpochDay() }
 
     val primaryZone = org?.primaryRateZone ?: "SANAA"
 
@@ -1684,7 +1693,7 @@ private fun UpdateRateDialog(
     initialZone: RateZone,
     onDismiss: () -> Unit
 ) {
-    val todayEpoch = remember { java.time.LocalDate.now().toEpochDay() }
+    val todayEpoch = remember { com.example.core.time.AppClock.todayEpochDay() }
     var currency by remember { mutableStateOf(initialCurrency) }
     var zone by remember { mutableStateOf(initialZone) }
     var rateInputText by remember { mutableStateOf("") }

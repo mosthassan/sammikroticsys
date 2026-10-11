@@ -38,6 +38,8 @@ import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.TrendingDown
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.WifiTethering
+import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -92,6 +94,7 @@ fun DashboardScreen(
     onNavigateToReceipts: () -> Unit,
     onNavigateToPayments: () -> Unit,
     onNavigateToReports: () -> Unit,
+    onNavigateToWifiSpectrum: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val summary by viewModel.dashboardSummary.collectAsState()
@@ -327,6 +330,79 @@ fun DashboardScreen(
                     Icon(Icons.Default.TrendingDown, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("سند صرف", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
+            }
+        }
+
+        // Network Tool Banner: WiFi Spectrum & Channel Inspector
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onNavigateToWifiSpectrum() }
+                    .testTag("dashboard_wifi_inspector_card"),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                ),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    BrandCyanPrimary.copy(alpha = 0.4f)
+                )
+            ) {
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(CircleShape)
+                            .background(BrandCyanPrimary.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.WifiTethering,
+                            contentDescription = null,
+                            tint = BrandCyanPrimary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "فاحص طيف وقنوات WiFi الميداني",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = BrandCyanPrimary.copy(alpha = 0.15f)
+                            ) {
+                                Text(
+                                    text = "2.4G / 5G",
+                                    fontSize = 9.sp,
+                                    color = BrandCyanPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
+                        Text(
+                            text = "تحليل الازدحام الراديوي، تحديد القنوات الأنظف، ومقياس توجيه الهوائيات اللحظي.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
+                        contentDescription = null,
+                        tint = BrandCyanPrimary,
+                        modifier = Modifier.size(16.dp)
+                    )
                 }
             }
         }

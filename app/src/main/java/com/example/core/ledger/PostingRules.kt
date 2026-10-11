@@ -3,6 +3,15 @@ package com.example.core.ledger
 import com.example.core.model.CurrencyCode
 import com.example.core.model.ExchangeRate
 
+data class AllocationReliefItem(
+    val invoiceDocId: String,
+    val invoiceDocNumber: Long,
+    val allocatedOrigMinor: Long,
+    val invoiceCurrency: CurrencyCode,
+    val invoiceRate: ExchangeRate,
+    val receivableRelievedBaseMinor: Long
+)
+
 /**
  * Pure functions generating balanced JournalDraft objects for every document type.
  * Zero Android dependencies, zero side-effects, 100% unit-testable on JVM.
@@ -1056,57 +1065,177 @@ object PostingRules {
     }
 
     /**
+     * Customer Receipt with FX settlement gain/loss across multiple allocated invoices (IAS 21):
+     * Computes receivable relief and FX variance using each invoice's own historical exchange rate.
+     */
+    fun createCustomerReceiptWithMultiAllocFxDraft(
+        treasuryGlCode: String,
+        treasuryId: String,
+        partyId: String,
+        amountOrigMinor: Long,
+        currency: CurrencyCode,
+        settlementRate: ExchangeRate,
+        allocationReliefs: List<AllocationReliefItem>,
+        unallocatedOrigMinor: Long = 0L,
+        dateEpochDay: Long,
+        memo: String
+    ): JournalDraft {
+        val cashReceivedBase = settlementRate.convert(amountOrigMinor)
+        val totalReceivableRelievedBase = allocationReliefs.sumOf { it.receivableRelievedBaseMinor }
+        val unallocatedBase = if (unallocatedOrigMinor > 0L) settlementRate.convert(unallocatedOrigMinor) else 0L
+        val totalCreditsBeforeFx = totalReceivableRelievedBase + unallocatedBase
+
+        val lines = mutableListOf<JournalDraftLine>()
+        var lineNo = 1
+
+        // 1. DR Treasury with actual cash received at settlement rate
+        lines.add(
+            JournalDraftLine(
+                lineNo = lineNo++,
+                accountCode = treasuryGlCode,
+                treasuryId = treasuryId,
+                origMinor = amountOrigMinor,
+                currency = currency,
+                exchangeRateMicros = settlementRate.rateMicros,
+                baseDebitMinor = cashReceivedBase,
+                baseCreditMinor = 0L,
+                memo = memo
+            )
+        )
+
+        // 2. If FX Loss: DR 5901
+        if (cashReceivedBase < totalCreditsBeforeFx) {
+            val lossMinor = totalCreditsBeforeFx - cashReceivedBase
+            lines.add(
+                JournalDraftLine(
+                    lineNo = lineNo++,
+                    accountCode = AccountConstants.REALIZED_FX_LOSS,
+                    origMinor = lossMinor,
+                    currency = CurrencyCode.FUNCTIONAL,
+                    exchangeRateMicros = ExchangeRate.SCALE_MICROS,
+                    baseDebitMinor = lossMinor,
+                    baseCreditMinor = 0L,
+                    memo = "خسارة تسوية فروق عملة: $memo"
+                )
+            )
+        }
+
+        // 3. CR 1201 for each allocated invoice using each invoice's own original rate
+        allocationReliefs.forEach { item ->
+            lines.add(
+                JournalDraftLine(
+                    lineNo = lineNo++,
+                    accountCode = AccountConstants.ACCOUNTS_RECEIVABLE,
+                    partyId = partyId,
+                    origMinor = item.allocatedOrigMinor,
+                    currency = item.invoiceCurrency,
+                    exchangeRateMicros = item.invoiceRate.rateMicros,
+                    baseDebitMinor = 0L,
+                    baseCreditMinor = item.receivableRelievedBaseMinor,
+                    memo = "سداد فاتورة #${item.invoiceDocNumber}: $memo"
+                )
+            )
+        }
+
+        // 4. CR 1201 for unallocated cash (if any)
+        if (unallocatedOrigMinor > 0L) {
+            lines.add(
+                JournalDraftLine(
+                    lineNo = lineNo++,
+                    accountCode = AccountConstants.ACCOUNTS_RECEIVABLE,
+                    partyId = partyId,
+                    origMinor = unallocatedOrigMinor,
+                    currency = currency,
+                    exchangeRateMicros = settlementRate.rateMicros,
+                    baseDebitMinor = 0L,
+                    baseCreditMinor = unallocatedBase,
+                    memo = "دفعة تحت الحساب غير مخصصة: $memo"
+                )
+            )
+        }
+
+        // 5. If FX Gain: CR 4901
+        if (cashReceivedBase > totalCreditsBeforeFx) {
+            val gainMinor = cashReceivedBase - totalCreditsBeforeFx
+            lines.add(
+                JournalDraftLine(
+                    lineNo = lineNo,
+                    accountCode = AccountConstants.REALIZED_FX_GAIN,
+                    origMinor = gainMinor,
+                    currency = CurrencyCode.FUNCTIONAL,
+                    exchangeRateMicros = ExchangeRate.SCALE_MICROS,
+                    baseDebitMinor = 0L,
+                    baseCreditMinor = gainMinor,
+                    memo = "أرباح تسوية فروق عملة: $memo"
+                )
+            )
+        }
+
+        val draft = JournalDraft(
+            type = JournalEntryType.NORMAL,
+            entryDateEpochDay = dateEpochDay,
+            memo = memo,
+            lines = lines
+        )
+        draft.assertBalanced()
+        return draft
+    }
+
+    /**
      * Year-end closing draft:
      * Clears all Revenue (4xxx) balances with Debits
      * Clears all Expense (5xxx) balances with Credits
      * Net difference transferred to 3301 (Retained Earnings)
      */
-    fun createClosingDraft(
-        revenueBalances: Map<String, Long>, // accountCode -> credit balance minor
-        expenseBalances: Map<String, Long>, // accountCode -> debit balance minor
+    fun createClosingDraftFromNetBalances(
+        netBalances: Map<String, Long>, // accountCode -> netDebit (totalDebit - totalCredit)
         dateEpochDay: Long,
         memo: String
     ): JournalDraft {
-        val totalRevenue = revenueBalances.values.sum()
-        val totalExpense = expenseBalances.values.sum()
-        val netIncome = totalRevenue - totalExpense
-
         val lines = mutableListOf<JournalDraftLine>()
         var lineNo = 1
 
-        // Debit revenues to zero them out
-        revenueBalances.filter { it.value > 0L }.forEach { (account, balance) ->
-            lines.add(
-                JournalDraftLine(
-                    lineNo = lineNo++,
-                    accountCode = account,
-                    origMinor = balance,
-                    currency = CurrencyCode.FUNCTIONAL,
-                    exchangeRateMicros = ExchangeRate.SCALE_MICROS,
-                    baseDebitMinor = balance,
-                    baseCreditMinor = 0L,
-                    memo = "إقفال إيراد $account"
+        var totalNominalDebits = 0L
+        var totalNominalCredits = 0L
+
+        netBalances.filter { it.value != 0L }.toSortedMap().forEach { (account, netDebit) ->
+            if (netDebit < 0L) {
+                // Net credit balance: Debit to zero out
+                val debitAmount = -netDebit
+                totalNominalDebits += debitAmount
+                lines.add(
+                    JournalDraftLine(
+                        lineNo = lineNo++,
+                        accountCode = account,
+                        origMinor = debitAmount,
+                        currency = CurrencyCode.FUNCTIONAL,
+                        exchangeRateMicros = ExchangeRate.SCALE_MICROS,
+                        baseDebitMinor = debitAmount,
+                        baseCreditMinor = 0L,
+                        memo = "إقفال رصيد دائن للحساب $account"
+                    )
                 )
-            )
+            } else if (netDebit > 0L) {
+                // Net debit balance: Credit to zero out
+                val creditAmount = netDebit
+                totalNominalCredits += creditAmount
+                lines.add(
+                    JournalDraftLine(
+                        lineNo = lineNo++,
+                        accountCode = account,
+                        origMinor = creditAmount,
+                        currency = CurrencyCode.FUNCTIONAL,
+                        exchangeRateMicros = ExchangeRate.SCALE_MICROS,
+                        baseDebitMinor = 0L,
+                        baseCreditMinor = creditAmount,
+                        memo = "إقفال رصيد مدين للحساب $account"
+                    )
+                )
+            }
         }
 
-        // Credit expenses to zero them out
-        expenseBalances.filter { it.value > 0L }.forEach { (account, balance) ->
-            lines.add(
-                JournalDraftLine(
-                    lineNo = lineNo++,
-                    accountCode = account,
-                    origMinor = balance,
-                    currency = CurrencyCode.FUNCTIONAL,
-                    exchangeRateMicros = ExchangeRate.SCALE_MICROS,
-                    baseDebitMinor = 0L,
-                    baseCreditMinor = balance,
-                    memo = "إقفال مصروف $account"
-                )
-            )
-        }
-
-        // Net income/loss to Retained Earnings (3301)
+        // Net income = total nominal debits - total nominal credits
+        val netIncome = totalNominalDebits - totalNominalCredits
         if (netIncome > 0L) {
             // Net profit: Credit 3301
             lines.add(
@@ -1123,7 +1252,7 @@ object PostingRules {
             )
         } else if (netIncome < 0L) {
             // Net loss: Debit 3301
-            val absLoss = kotlin.math.abs(netIncome)
+            val absLoss = -netIncome
             lines.add(
                 JournalDraftLine(
                     lineNo = lineNo,
@@ -1138,12 +1267,30 @@ object PostingRules {
             )
         }
 
-        return JournalDraft(
+        val draft = JournalDraft(
             type = JournalEntryType.CLOSING,
             entryDateEpochDay = dateEpochDay,
             memo = memo,
             lines = lines
         )
+        draft.assertBalanced()
+        return draft
+    }
+
+    fun createClosingDraft(
+        revenueBalances: Map<String, Long>, // accountCode -> credit balance minor
+        expenseBalances: Map<String, Long>, // accountCode -> debit balance minor
+        dateEpochDay: Long,
+        memo: String
+    ): JournalDraft {
+        val netBalances = mutableMapOf<String, Long>()
+        revenueBalances.forEach { (acc, creditBal) ->
+            netBalances[acc] = -creditBal
+        }
+        expenseBalances.forEach { (acc, debitBal) ->
+            netBalances[acc] = debitBal
+        }
+        return createClosingDraftFromNetBalances(netBalances, dateEpochDay, memo)
     }
 
     /**
