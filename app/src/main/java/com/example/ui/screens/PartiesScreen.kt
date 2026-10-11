@@ -253,12 +253,12 @@ fun PartiesScreen(
                     var partyBalance by remember { mutableStateOf<Long?>(null) }
 
                     LaunchedEffect(party.id) {
-                        val controlCode = when {
-                            party.isPartner -> AccountConstants.PARTNER_CURRENT
-                            party.isVendor -> AccountConstants.ACCOUNTS_PAYABLE
-                            else -> AccountConstants.ACCOUNTS_RECEIVABLE
+                        partyBalance = if (party.isPartner) {
+                            viewModel.repository.getPartnerTotalEquity(party.id)
+                        } else {
+                            val controlCode = if (party.isVendor) AccountConstants.ACCOUNTS_PAYABLE else AccountConstants.ACCOUNTS_RECEIVABLE
+                            viewModel.repository.getPartyBalance(party.id, controlCode)
                         }
-                        partyBalance = viewModel.repository.getPartyBalance(party.id, controlCode)
                     }
 
                     Card(

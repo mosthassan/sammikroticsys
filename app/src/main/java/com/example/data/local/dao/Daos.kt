@@ -310,12 +310,40 @@ internal interface JournalDao {
 
     @Query("""
         SELECT COALESCE(
-            SUM(CASE WHEN baseDebitMinor > 0 THEN origMinor ELSE -origMinor END), 0
+            SUM(
+                CASE 
+                    WHEN baseDebitMinor > 0 THEN origMinor 
+                    WHEN baseCreditMinor > 0 THEN -origMinor 
+                    ELSE 0 
+                END
+            ), 0
         )
         FROM journal_lines
         WHERE treasuryId = :treasuryId
     """)
     suspend fun getNetOrigBalanceForTreasury(treasuryId: String): Long
+
+    @Query("""
+        SELECT COALESCE(
+            SUM(
+                CASE 
+                    WHEN baseDebitMinor > 0 THEN origMinor 
+                    WHEN baseCreditMinor > 0 THEN -origMinor 
+                    ELSE 0 
+                END
+            ), 0
+        )
+        FROM journal_lines
+        WHERE accountCode IN ('1101', '1102') AND currency = :currency
+    """)
+    suspend fun getNetOrigBalanceForCashAccount(currency: String): Long
+
+    @Query("""
+        SELECT COALESCE(SUM(baseDebitMinor) - SUM(baseCreditMinor), 0)
+        FROM journal_lines
+        WHERE accountCode IN ('1101', '1102') AND currency = :currency
+    """)
+    suspend fun getNetBaseBalanceForCashAccount(currency: String): Long
 
     @Query("""
         SELECT COALESCE(

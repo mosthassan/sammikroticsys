@@ -1,6 +1,6 @@
 {
-  "name": "SamMikrotik",
-  "description": "نظام إداري ومالي لمزودي خدمة الإنترنت وشبكات التوزيع اللاسلكية بنواة محاسبية مزدوجة القيد",
+  "name": "سام ميكروتك",
+  "description": "سام ميكروتك نظام ادارة الشبكات - نظام مالي وإداري متكامل لمزودي خدمة الإنترنت وشبكات التوزيع اللاسلكية",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

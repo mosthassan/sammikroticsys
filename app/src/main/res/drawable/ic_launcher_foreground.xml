@@ -3,7 +3,6 @@
     <item
         android:width="66dp"
         android:height="66dp"
-        android:drawable="@drawable/sammikrotik_icon_1791148118808"
+        android:drawable="@drawable/sammikrotik_ai_logo_1791682432718"
         android:gravity="center" />
 </layer-list>
-

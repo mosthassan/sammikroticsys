@@ -124,15 +124,21 @@ import com.example.ui.viewmodel.AppViewModel
 @Composable
 fun VouchersScreen(
     viewModel: AppViewModel,
+    initialTab: Int = 0,
     modifier: Modifier = Modifier
 ) {
     val documents by viewModel.allDocuments.collectAsState()
     val parties by viewModel.allParties.collectAsState()
     val treasuries by viewModel.allTreasuries.collectAsState()
 
-    var selectedTab by remember { mutableIntStateOf(0) } // 0: Receipts (قبض), 1: Payments (صرف)
+    var selectedTab by remember(initialTab) { mutableIntStateOf(initialTab) } // 0: Receipts (قبض), 1: Payments (صرف)
     var showVoucherCreationSheet by remember { mutableStateOf(false) }
-    var voucherCreationInitialTab by remember { mutableIntStateOf(0) }
+    var voucherCreationInitialTab by remember(initialTab) { mutableIntStateOf(initialTab) }
+
+    LaunchedEffect(initialTab) {
+        selectedTab = initialTab
+        voucherCreationInitialTab = initialTab
+    }
 
     var selectedVoucherForDetail by remember { mutableStateOf<DocumentEntity?>(null) }
     var voucherToVoid by remember { mutableStateOf<DocumentEntity?>(null) }
@@ -717,7 +723,6 @@ fun VoucherCreationBottomSheet(
 ) {
     var voucherMode by remember { mutableIntStateOf(initialTab) } // 0: Receipt, 1: Payment
     val isReceipt = voucherMode == 0
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     val context = androidx.compose.ui.platform.LocalContext.current
     val effectiveConfig = networkConfig ?: remember {
@@ -742,6 +747,18 @@ fun VoucherCreationBottomSheet(
     var selectedTreasuryId by remember { mutableStateOf(treasuries.firstOrNull()?.id ?: "TR_MAIN_YER") }
     var amountText by remember { mutableStateOf("") }
     var notes by remember { mutableStateOf("") }
+
+    val hasEnteredData = amountText.isNotBlank() || notes.isNotBlank()
+    val sheetState = rememberModalBottomSheetState(
+        skipPartiallyExpanded = true,
+        confirmValueChange = { newState ->
+            if (hasEnteredData && newState == androidx.compose.material3.SheetValue.Hidden) {
+                false
+            } else {
+                true
+            }
+        }
+    )
 
     var partyDropdownExpanded by remember { mutableStateOf(false) }
     var treasuryDropdownExpanded by remember { mutableStateOf(false) }
@@ -813,6 +830,18 @@ fun VoucherCreationBottomSheet(
 
     val selectedCustomer = customers.find { it.id == selectedPartyId } ?: customers.first()
     val selectedRecipient = relevantRecipients.find { it.id == selectedRecipientId } ?: relevantRecipients.first()
+
+    LaunchedEffect(relevantRecipients) {
+        if (relevantRecipients.none { it.id == selectedRecipientId }) {
+            selectedRecipientId = relevantRecipients.first().id
+        }
+    }
+
+    LaunchedEffect(treasuries) {
+        if (treasuries.isNotEmpty() && treasuries.none { it.id == selectedTreasuryId }) {
+            selectedTreasuryId = treasuries.first().id
+        }
+    }
 
     val themeColor = if (isReceipt) SemanticIncomeGreen else SemanticExpenseRed
     val amountMinor = (amountText.toLongOrNull() ?: 0L) * 100L
@@ -1380,6 +1409,10 @@ fun VoucherCreationBottomSheet(
                 Spacer(modifier = Modifier.height(6.dp))
 
                 // Prominent Action Button
+                val treasuryToUse = treasuries.find { it.id == selectedTreasuryId }?.id
+                    ?: treasuries.firstOrNull()?.id
+                    ?: selectedTreasuryId
+
                 Button(
                     onClick = {
                         if (amountMinor > 0L) {
@@ -1390,8 +1423,8 @@ fun VoucherCreationBottomSheet(
                             }
                             if (isReceipt) {
                                 onSubmitReceipt(
-                                    selectedPartyId,
-                                    selectedTreasuryId,
+                                    selectedCustomer.id,
+                                    treasuryToUse,
                                     amountMinor,
                                     currency,
                                     rate,
@@ -1400,8 +1433,8 @@ fun VoucherCreationBottomSheet(
                                 )
                             } else {
                                 onSubmitPayment(
-                                    selectedRecipientId,
-                                    selectedTreasuryId,
+                                    selectedRecipient.id,
+                                    treasuryToUse,
                                     amountMinor,
                                     currency,
                                     rate,
@@ -1422,6 +1455,7 @@ fun VoucherCreationBottomSheet(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(50.dp)
+                        .testTag(if (isReceipt) "btn_post_receipt_voucher" else "btn_post_payment_voucher")
                 ) {
                     Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))

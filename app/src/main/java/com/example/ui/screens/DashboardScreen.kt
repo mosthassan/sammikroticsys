@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import android.app.Activity
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,6 +20,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import com.example.R
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.AccountCircle
@@ -29,6 +33,7 @@ import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Money
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Receipt
+import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.TrendingDown
 import androidx.compose.material.icons.filled.TrendingUp
@@ -103,6 +108,67 @@ fun DashboardScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // App Title Banner
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("dashboard_app_title_card"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                ),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    BrandCyanPrimary.copy(alpha = 0.4f)
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(
+                                1.5.dp,
+                                BrandCyanPrimary.copy(alpha = 0.8f),
+                                RoundedCornerShape(12.dp)
+                            )
+                            .background(Color(0xFF06122B)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Image(
+                            painter = painterResource(id = R.drawable.sammikrotik_ai_logo_1791682432718),
+                            contentDescription = "شعار سام ميكروتك 2026",
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(RoundedCornerShape(12.dp)),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = "سام ميكروتك نظام ادارة الشبكات",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "نظام مالي ومحاسبي متكامل لإدارة شبكات الإنترنت والمايكروتك",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = BrandCyanPrimary,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+        }
+
         // Invariant Status Banner
         item {
             InvariantBanner(
@@ -342,6 +408,7 @@ fun DashboardScreen(
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier
                     .fillMaxWidth()
+                    .testTag("dashboard_treasury_balances_card")
                     .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
             ) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -349,9 +416,9 @@ fun DashboardScreen(
                     val usd = summary.treasuryBalancesByCurrency["USD"] ?: 0L
                     val sar = summary.treasuryBalancesByCurrency["SAR"] ?: 0L
 
-                    TreasuryBalanceRow("صندوق الريال اليمني (YER)", Money(yer, CurrencyCode.YER), SemanticIncomeGreen)
-                    TreasuryBalanceRow("خزينة الدولار الأمريكي (USD)", Money(usd, CurrencyCode.USD), MaterialTheme.colorScheme.primary)
-                    TreasuryBalanceRow("خزينة الريال السعودي (SAR)", Money(sar, CurrencyCode.SAR), SemanticWarningAmber)
+                    TreasuryBalanceRow("صندوق الريال اليمني (YER)", Money(yer, CurrencyCode.YER), SemanticIncomeGreen, Modifier.testTag("row_vault_yer"))
+                    TreasuryBalanceRow("خزينة الدولار الأمريكي (USD)", Money(usd, CurrencyCode.USD), MaterialTheme.colorScheme.primary, Modifier.testTag("row_vault_usd"))
+                    TreasuryBalanceRow("خزينة الريال السعودي (SAR)", Money(sar, CurrencyCode.SAR), SemanticWarningAmber, Modifier.testTag("row_vault_sar"))
                 }
             }
         }
@@ -394,10 +461,11 @@ fun DashboardScreen(
 fun TreasuryBalanceRow(
     title: String,
     money: Money,
-    accentColor: Color
+    accentColor: Color,
+    modifier: Modifier = Modifier
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {

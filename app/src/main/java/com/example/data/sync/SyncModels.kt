@@ -17,6 +17,10 @@ data class SyncMetadata(
     val totalTreasuries: Int = 0,
     val totalAllocations: Int = 0,
     val totalDevices: Int = 0,
+    val totalNetworkDevices: Int = totalDevices,
+    val totalCurrencyRates: Int = 0,
+    val networkName: String = "",
+    val organizationName: String = "",
     val hasNetworkProfile: Boolean = false,
     val isBalanced: Boolean = true,
     val checksum: String = ""

@@ -39,6 +39,22 @@ class BackupRestoreUseCase(
         root.put("schemaVersion", 1)
         root.put("timestamp", System.currentTimeMillis())
 
+        // 0. Organization (هوية المنشأة والشبكة)
+        val org = db.organizationDao().getOrganizationSync()
+        if (org != null) {
+            val orgObj = JSONObject()
+            orgObj.put("id", org.id)
+            orgObj.put("name", org.name)
+            orgObj.put("taxNumber", org.taxNumber)
+            orgObj.put("functionalCurrency", org.functionalCurrency)
+            orgObj.put("fiscalYearStartMonth", org.fiscalYearStartMonth)
+            orgObj.put("isInitialized", org.isInitialized)
+            orgObj.put("primaryRateZone", org.primaryRateZone)
+            orgObj.put("equityShareMode", org.equityShareMode)
+            orgObj.put("createdAt", org.createdAt)
+            root.put("organization", orgObj)
+        }
+
         // 1. Parties
         val partiesArr = JSONArray()
         db.partyDao().getAllPartiesSync().forEach { p ->
@@ -359,6 +375,28 @@ class BackupRestoreUseCase(
             sdb.execSQL("DELETE FROM card_packages")
             sdb.execSQL("DELETE FROM parties WHERE id != 'WALK_IN_CASH'")
             sdb.execSQL("DELETE FROM currency_rates")
+
+            // 0. Restore Organization if present
+            if (root.has("organization")) {
+                val orgObj = root.getJSONObject("organization")
+                sdb.execSQL("DELETE FROM organizations")
+                val orgStmt = sdb.compileStatement("""
+                    INSERT OR REPLACE INTO organizations 
+                    (id, name, taxNumber, functionalCurrency, fiscalYearStartMonth, isInitialized, primaryRateZone, equityShareMode, createdAt)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """.trimIndent())
+                orgStmt.bindString(1, orgObj.getString("id"))
+                orgStmt.bindString(2, orgObj.getString("name"))
+                orgStmt.bindString(3, orgObj.optString("taxNumber", ""))
+                orgStmt.bindString(4, orgObj.optString("functionalCurrency", "YER"))
+                orgStmt.bindLong(5, orgObj.optLong("fiscalYearStartMonth", 1L))
+                orgStmt.bindLong(6, if (orgObj.optBoolean("isInitialized", true)) 1L else 0L)
+                orgStmt.bindString(7, orgObj.optString("primaryRateZone", "SANAA"))
+                orgStmt.bindString(8, orgObj.optString("equityShareMode", "DERIVED_FROM_CAPITAL"))
+                orgStmt.bindLong(9, orgObj.optLong("createdAt", System.currentTimeMillis()))
+                orgStmt.executeInsert()
+                orgStmt.close()
+            }
 
             // 1. Restore Parties (using parameterized statement)
             val partiesArr = root.optJSONArray("parties") ?: JSONArray()

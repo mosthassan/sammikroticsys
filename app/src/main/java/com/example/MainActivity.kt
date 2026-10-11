@@ -99,7 +99,8 @@ import com.example.ui.theme.SemanticIncomeGreen
 import com.example.ui.viewmodel.AppViewModel
 
 object AppBrand {
-    const val NAME = "SamMikrotik"
+    const val NAME = "سام ميكروتك"
+    const val DASHBOARD_TITLE = "سام ميكروتك نظام ادارة الشبكات"
     const val TAGLINE = "النظام المالي المحاسبي المتكامل لشبكات الإنترنت"
 }
 
@@ -141,6 +142,7 @@ class MainActivity : ComponentActivity() {
                 val snackbarHostState = remember { SnackbarHostState() }
 
                 var selectedTabIndex by rememberSaveable { mutableIntStateOf(0) }
+                var vouchersInitialTab by rememberSaveable { mutableIntStateOf(0) }
                 val invariantResult by appViewModel.invariantResult.collectAsState()
                 val syncState by appViewModel.syncState.collectAsState()
                 val currentUser by appViewModel.currentUser.collectAsState()
@@ -170,7 +172,7 @@ class MainActivity : ComponentActivity() {
                             title = {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                     Text(
-                                        text = AppBrand.NAME,
+                                        text = if (selectedTabIndex == 0) AppBrand.DASHBOARD_TITLE else AppBrand.NAME,
                                         style = MaterialTheme.typography.titleMedium,
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.onSurface
@@ -277,13 +279,19 @@ class MainActivity : ComponentActivity() {
                             viewModel = appViewModel,
                             onNavigateToQuickSale = { selectedTabIndex = 1 },
                             onNavigateToSales = { selectedTabIndex = 1 },
-                            onNavigateToReceipts = { selectedTabIndex = 2 },
-                            onNavigateToPayments = { selectedTabIndex = 2 },
+                            onNavigateToReceipts = {
+                                vouchersInitialTab = 0
+                                selectedTabIndex = 2
+                            },
+                            onNavigateToPayments = {
+                                vouchersInitialTab = 1
+                                selectedTabIndex = 2
+                            },
                             onNavigateToReports = { selectedTabIndex = 6 },
                             modifier = modifier
                         )
                         1 -> SalesScreen(viewModel = appViewModel, modifier = modifier)
-                        2 -> VouchersScreen(viewModel = appViewModel, modifier = modifier)
+                        2 -> VouchersScreen(viewModel = appViewModel, initialTab = vouchersInitialTab, modifier = modifier)
                         3 -> PurchasesAssetsScreen(viewModel = appViewModel, modifier = modifier)
                         4 -> PartiesAndStockCombinedScreen(viewModel = appViewModel, modifier = modifier)
                         5 -> NetworkHubScreen(
@@ -329,7 +337,7 @@ class MainActivity : ComponentActivity() {
                         text = {
                             Column {
                                 Text(
-                                    text = "تم العثور على نسخة احتياطية سحابية سابقة لحسابك (${backup.userEmail}) بتاريخ $dateStr تحتوي على ${backup.documentsCount} مستنداً و ${backup.journalLinesCount} قيداً.",
+                                    text = "تم العثور على نسخة احتياطية سحابية سابقة لحسابك (${backup.userEmail}) بتاريخ $dateStr تحتوي على ${backup.documentsCount} مستنداً و ${backup.journalLinesCount} قيداً و ${backup.networkDevicesCount} جهازاً و ${backup.currencyRatesCount} سعر صرف.",
                                     style = MaterialTheme.typography.bodyMedium
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))

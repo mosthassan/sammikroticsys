@@ -1,11 +1,15 @@
 package com.example.domain.usecase
 
 import com.example.core.ledger.PartnerDividendSpec
+import com.example.core.model.CurrencyCode
 import com.example.core.model.EquityShareMode
+import com.example.core.model.ExchangeRate
+import com.example.core.model.RateZone
 import com.example.data.ledger.LedgerWriter
 import com.example.data.local.AppDatabase
 import com.example.data.local.entity.DocumentEntity
 import com.example.data.local.entity.PartyEntity
+import com.example.data.network.NetworkConfig
 import java.math.BigInteger
 
 data class PartnerEquityReportItem(
@@ -235,5 +239,42 @@ class PartnerEquityUseCase(
             dateEpochDay = dateEpochDay,
             notes = notes
         )
+    }
+
+    /**
+     * Resolves the default exchange rate for a partner capital contribution
+     * based on currency, active rate zone, and network configuration.
+     */
+    suspend fun resolveContributionRate(
+        currency: CurrencyCode,
+        dateEpochDay: Long,
+        rateZone: RateZone = RateZone.DEFAULT,
+        networkConfig: NetworkConfig? = null,
+        resolver: ExchangeRateResolver? = null
+    ): Long {
+        if (currency == CurrencyCode.FUNCTIONAL) return ExchangeRate.SCALE_MICROS
+        val effectiveResolver = resolver ?: ExchangeRateResolver(db)
+        return when (currency) {
+            CurrencyCode.USD -> {
+                if (networkConfig != null && rateZone == networkConfig.rateZone && networkConfig.defaultUsdRateMicros > 0L) {
+                    networkConfig.defaultUsdRateMicros
+                } else {
+                    effectiveResolver.resolveOrNull(CurrencyCode.USD, dateEpochDay, rateZone)?.rateMicros
+                        ?: if (rateZone == RateZone.ADEN) 1_600_000_000L else 535_000_000L
+                }
+            }
+            CurrencyCode.SAR -> {
+                if (networkConfig != null && rateZone == networkConfig.rateZone && networkConfig.defaultSarRateMicros > 0L) {
+                    networkConfig.defaultSarRateMicros
+                } else {
+                    effectiveResolver.resolveOrNull(CurrencyCode.SAR, dateEpochDay, rateZone)?.rateMicros
+                        ?: if (rateZone == RateZone.ADEN) 420_000_000L else 140_500_000L
+                }
+            }
+            else -> {
+                effectiveResolver.resolveOrNull(currency, dateEpochDay, rateZone)?.rateMicros
+                    ?: ExchangeRate.SCALE_MICROS
+            }
+        }
     }
 }

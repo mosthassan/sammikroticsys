@@ -143,7 +143,7 @@ fun ExchangeRateCard(
     if (currency == CurrencyCode.FUNCTIONAL) return
 
     val rateFormatted = if (rate != null) ExchangeRate.formatRateMicros(rate.rateMicros) else "غير محدد"
-    val zoneShortName = if (zone == RateZone.SANAA) "صنعاء" else "عدن"
+    val zoneShortName = if (zone == RateZone.SANAA) "نطاق صنعاء" else "نطاق عدن"
 
     Surface(
         modifier = modifier
