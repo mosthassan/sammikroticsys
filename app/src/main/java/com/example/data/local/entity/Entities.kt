@@ -15,6 +15,8 @@ data class OrganizationEntity(
     val isInitialized: Boolean = false,
     val primaryRateZone: String = "SANAA",
     val equityShareMode: String = "DERIVED_FROM_CAPITAL",
+    val allowNegativeStock: Boolean = false,
+    val timeZone: String = "Asia/Aden",
     val createdAt: Long = System.currentTimeMillis()
 )
 
@@ -110,6 +112,7 @@ data class DocumentEntity(
     val status: String, // DRAFT, POSTED, VOIDED
     val notes: String = "",
     val reversalOfDocId: String? = null,
+    val revision: Int = 0,
     val createdAt: Long = System.currentTimeMillis()
 )
 
@@ -135,7 +138,8 @@ data class DocumentItemEntity(
     indices = [
         Index(value = ["docId"]),
         Index(value = ["entryDateEpochDay"]),
-        Index(value = ["type"])
+        Index(value = ["type"]),
+        Index(value = ["entryNumber"], unique = true)
     ]
 )
 data class JournalEntryEntity(
@@ -145,6 +149,7 @@ data class JournalEntryEntity(
     val entryDateEpochDay: Long,
     val type: String, // NORMAL, REVERSAL, CLOSING
     val memo: String,
+    val reversalOfEntryId: String? = null,
     val createdAt: Long = System.currentTimeMillis()
 )
 

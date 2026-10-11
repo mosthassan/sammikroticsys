@@ -8,6 +8,7 @@ import com.example.core.model.RateZone
 import com.example.data.ledger.LedgerWriter
 import com.example.data.local.AppDatabase
 import com.example.data.local.entity.DocumentEntity
+import com.example.data.local.entity.OrganizationEntity
 import com.example.data.local.entity.PartyEntity
 import com.example.data.network.NetworkConfig
 import java.math.BigInteger
@@ -53,8 +54,18 @@ class PartnerEquityUseCase(
      * Updates the organization's equity share mode.
      */
     suspend fun setEquityShareMode(mode: EquityShareMode) {
-        val org = db.organizationDao().getOrganizationSync() ?: return
-        db.organizationDao().updateEquityShareMode(org.id, mode.name)
+        val org = db.organizationDao().getOrganizationSync()
+        if (org != null) {
+            db.organizationDao().updateEquityShareMode(org.id, mode.name)
+        } else {
+            db.organizationDao().insertOrganization(
+                OrganizationEntity(
+                    id = "DEFAULT_ORG",
+                    name = "شبكة سام اللاسلكية",
+                    equityShareMode = mode.name
+                )
+            )
+        }
     }
 
     /**

@@ -125,7 +125,7 @@ fun ReportsScreen(
     val balanceReport by viewModel.balanceSheet.collectAsState()
     val agingReport by viewModel.agingReport.collectAsState()
 
-    val todayEpoch = remember { System.currentTimeMillis() / 86400000L }
+    val todayEpoch = remember { com.example.core.time.AppClock.todayEpochDay() }
 
     LaunchedEffect(selectedTab) {
         when (selectedTab) {
@@ -202,7 +202,7 @@ private fun IncomeStatementView(
     onPeriodSelected: (Long?, Long?) -> Unit
 ) {
     var periodMode by remember { mutableIntStateOf(1) } // 0: Today, 1: Month, 2: All time
-    val todayEpoch = remember { System.currentTimeMillis() / 86400000L }
+    val todayEpoch = remember { com.example.core.time.AppClock.todayEpochDay() }
 
     LazyColumn(
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -499,7 +499,7 @@ private fun BalanceSheetView(
                     ReportLineRow("رأس المال التأسيسي (3101)", report.capitalMinor, isPositive = true)
                     ReportLineRow("جاري الشركاء والمساهمين (3201)", report.partnerCurrentMinor, isPositive = true)
                     ReportLineRow("الأرباح المحتجزة / المرحّلة (3301)", report.retainedEarningsMinor, isPositive = true)
-                    ReportLineRow("أرباح الفترة الحالية", report.currentPeriodNetProfitMinor, isPositive = report.currentPeriodNetProfitMinor >= 0)
+                    ReportLineRow("أرباح / خسائر غير مقفلة (Unclosed Profit/Loss)", report.unclosedProfitMinor, isPositive = report.unclosedProfitMinor >= 0)
                     HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                     ReportSubtotalRow("إجمالي حقوق الملكية (Total Equity)", report.totalEquityMinor, isHighlight = false)
                 }
@@ -856,7 +856,7 @@ private fun PartnerDividendsView(
                             onClick = {
                                 if (parsedProfitMinor > 0L) {
                                     isPosting = true
-                                    val year = java.time.LocalDate.now().year
+                                    val year = com.example.core.time.AppClock.todayLocalDate().year
                                     viewModel.executeProfitDistribution(
                                         fiscalYear = year,
                                         totalProfitMinor = parsedProfitMinor,

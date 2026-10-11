@@ -729,7 +729,7 @@ fun VoucherCreationBottomSheet(
         com.example.data.network.NetworkRepository(context).config.value
     }
     val effectiveResolver = resolver ?: remember { ExchangeRateResolver(AppDatabase.getInstance(context)) }
-    val today = remember { java.time.LocalDate.now().toEpochDay() }
+    val today = remember { com.example.core.time.AppClock.todayEpochDay() }
     val inheritedZone = effectiveConfig.rateZone
 
     // Form States

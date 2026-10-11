@@ -143,6 +143,7 @@ class MainActivity : ComponentActivity() {
 
                 var selectedTabIndex by rememberSaveable { mutableIntStateOf(0) }
                 var vouchersInitialTab by rememberSaveable { mutableIntStateOf(0) }
+                var networkHubInitialTab by rememberSaveable { mutableIntStateOf(0) }
                 val invariantResult by appViewModel.invariantResult.collectAsState()
                 val syncState by appViewModel.syncState.collectAsState()
                 val currentUser by appViewModel.currentUser.collectAsState()
@@ -288,6 +289,10 @@ class MainActivity : ComponentActivity() {
                                 selectedTabIndex = 2
                             },
                             onNavigateToReports = { selectedTabIndex = 6 },
+                            onNavigateToWifiSpectrum = {
+                                networkHubInitialTab = 5
+                                selectedTabIndex = 5
+                            },
                             modifier = modifier
                         )
                         1 -> SalesScreen(viewModel = appViewModel, modifier = modifier)
@@ -297,6 +302,7 @@ class MainActivity : ComponentActivity() {
                         5 -> NetworkHubScreen(
                             networkRepository = appViewModel.networkRepository,
                             viewModel = appViewModel,
+                            initialTab = networkHubInitialTab,
                             modifier = modifier
                         )
                         6 -> ReportsScreen(viewModel = appViewModel, modifier = modifier)

@@ -122,9 +122,10 @@ class InspectorViewModel(application: Application) : AndroidViewModel(applicatio
      */
     fun seedDemoTransactions() {
         viewModelScope.launch {
-            val today = (System.currentTimeMillis() / 86400000L)
+            val today = com.example.core.time.AppClock.todayEpochDay()
             val yerRate = ExchangeRate.parity(CurrencyCode.YER)
             val usdRate = ExchangeRateResolver(db).resolve(CurrencyCode.USD, today)
+            val fy = com.example.core.time.FiscalCalendar.fiscalYearOf(today)
 
             // 1. Create a grocery agent party
             val agentParty = PartyEntity(
@@ -138,7 +139,7 @@ class InspectorViewModel(application: Application) : AndroidViewModel(applicatio
             // 2. Post Sales Invoice: 100 cards @ 500 YER = 50,000 YER
             val inv = repository.ledgerWriter.postSalesInvoice(
                 partyId = agentParty.id,
-                fiscalYear = 2026,
+                fiscalYear = fy,
                 dateEpochDay = today,
                 currency = CurrencyCode.YER,
                 exchangeRate = yerRate,
@@ -157,7 +158,7 @@ class InspectorViewModel(application: Application) : AndroidViewModel(applicatio
             repository.ledgerWriter.postCustomerReceipt(
                 partyId = agentParty.id,
                 treasuryId = "TR_MAIN_YER",
-                fiscalYear = 2026,
+                fiscalYear = fy,
                 dateEpochDay = today,
                 amountOrigMinor = 3000000L,
                 currency = CurrencyCode.YER,
@@ -170,7 +171,7 @@ class InspectorViewModel(application: Application) : AndroidViewModel(applicatio
             repository.ledgerWriter.postPaymentVoucher(
                 recipientPartyId = AppDatabase.WALK_IN_CASH_PARTY_ID,
                 treasuryId = "TR_USD_VAULT",
-                fiscalYear = 2026,
+                fiscalYear = fy,
                 dateEpochDay = today,
                 amountOrigMinor = 25000L, // $250.00
                 currency = CurrencyCode.USD,
@@ -190,7 +191,7 @@ class InspectorViewModel(application: Application) : AndroidViewModel(applicatio
 
             repository.ledgerWriter.postPurchaseInvoice(
                 vendorPartyId = vendorParty.id,
-                fiscalYear = 2026,
+                fiscalYear = fy,
                 dateEpochDay = today,
                 currency = CurrencyCode.USD,
                 exchangeRate = usdRate,

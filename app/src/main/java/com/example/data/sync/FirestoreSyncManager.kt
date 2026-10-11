@@ -734,7 +734,7 @@ class FirestoreSyncManager(
                     stmt.bindString(2, m["currency"]?.toString() ?: "USD")
                     stmt.bindString(3, m["zone"]?.toString() ?: "SANAA")
                     stmt.bindLong(4, (m["rateMicros"] as? Number)?.toLong() ?: 535_000_000L)
-                    stmt.bindLong(5, (m["effectiveDateEpochDay"] as? Number)?.toLong() ?: (System.currentTimeMillis() / 86400000L))
+                    stmt.bindLong(5, (m["effectiveDateEpochDay"] as? Number)?.toLong() ?: com.example.core.time.AppClock.todayEpochDay())
                     stmt.bindLong(6, (m["createdAt"] as? Number)?.toLong() ?: System.currentTimeMillis())
                     stmt.bindString(7, m["createdBy"]?.toString() ?: "SYSTEM")
                     stmt.bindString(8, m["reason"]?.toString() ?: "")

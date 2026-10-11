@@ -116,6 +116,56 @@ class LedgerInvariants(private val db: AppDatabase) {
             }
         }
 
+        // 5. Accounting Equation Verification: Assets == Liabilities + Stated Equity + Unclosed Profit
+        val checkDates = mutableListOf<Long?>()
+        val allEntries = db.journalDao().getAllEntriesSync()
+        if (allEntries.isNotEmpty()) {
+            checkDates.add(allEntries.maxOf { it.entryDateEpochDay })
+        }
+        val closedPeriods = db.fiscalPeriodDao().getClosedPeriods()
+        closedPeriods.forEach { p ->
+            val endOfMonth = java.time.LocalDate.of(p.year, p.month, 1).plusMonths(1).minusDays(1).toEpochDay()
+            checkDates.add(endOfMonth)
+        }
+
+        checkDates.distinct().forEach { date ->
+            val bsLines = db.journalDao().getBalanceSheetLines(date)
+            var totalAssets = 0L
+            var totalLiabilities = 0L
+            var totalStatedEquity = 0L
+
+            bsLines.forEach { row ->
+                when {
+                    row.accountCode.startsWith("1") -> {
+                        if (row.accountCode == AccountConstants.ACCUMULATED_DEPRECIATION) {
+                            totalAssets -= row.netBalanceMinor
+                        } else {
+                            totalAssets += row.netBalanceMinor
+                        }
+                    }
+                    row.accountCode.startsWith("2") -> {
+                        totalLiabilities += row.netBalanceMinor
+                    }
+                    row.accountCode.startsWith("3") -> {
+                        totalStatedEquity += row.netBalanceMinor
+                    }
+                }
+            }
+
+            val unclosedProfit = db.journalDao().getUnclosedNominalBalance(date)
+            val totalLiabAndEquity = totalLiabilities + totalStatedEquity + unclosedProfit
+
+            if (totalAssets != totalLiabAndEquity) {
+                violations.add(
+                    InvariantViolation(
+                        invariantCode = "INV-005-ACCOUNTING-EQUATION",
+                        description = "Accounting Invariant Equation Out of Equilibrium",
+                        details = "At date $date: Assets ($totalAssets) != Liabilities ($totalLiabilities) + Equity ($totalStatedEquity) + Unclosed Profit ($unclosedProfit) = $totalLiabAndEquity, variance: ${totalAssets - totalLiabAndEquity}"
+                    )
+                )
+            }
+        }
+
         val isValid = violations.isEmpty()
         if (failFast && !isValid) {
             val first = violations.first()
@@ -125,10 +175,50 @@ class LedgerInvariants(private val db: AppDatabase) {
         return InvariantCheckResult(
             isValid = isValid,
             violations = violations,
-            totalEntriesChecked = 0,
+            totalEntriesChecked = allEntries.size,
             totalLinesChecked = 0,
             trialBalanceDebit = totalTrialDebit,
             trialBalanceCredit = totalTrialCredit
         )
+    }
+
+    /**
+     * Lightweight O(1) single-entry verification running always after every posting in production:
+     * - Debit/Credit balance equality
+     * - Period validity
+     * - Valid amounts
+     */
+    suspend fun verifyEntry(entryId: String) {
+        val entry = db.journalDao().getEntryById(entryId)
+            ?: error("Entry $entryId not found")
+        val lines = db.journalDao().getLinesForEntry(entryId)
+        require(lines.isNotEmpty()) { "Entry $entryId has no lines" }
+
+        val totalDebit = lines.sumOf { it.baseDebitMinor }
+        val totalCredit = lines.sumOf { it.baseCreditMinor }
+        require(totalDebit == totalCredit) {
+            "Entry $entryId is unbalanced: Debit $totalDebit != Credit $totalCredit (difference: ${totalDebit - totalCredit})"
+        }
+
+        lines.forEach { line ->
+            require(line.baseDebitMinor >= 0L && line.baseCreditMinor >= 0L) {
+                "Line ${line.lineNo} of entry $entryId has negative debit or credit amount"
+            }
+            require(line.baseDebitMinor > 0L || line.baseCreditMinor > 0L) {
+                "Line ${line.lineNo} of entry $entryId has zero debit and zero credit"
+            }
+            require(line.accountCode.isNotBlank()) {
+                "Line ${line.lineNo} of entry $entryId has blank account code"
+            }
+        }
+
+        // Period validity check
+        val (fy, month) = com.example.core.time.FiscalCalendar.DEFAULT.periodOf(entry.entryDateEpochDay)
+        val period = db.fiscalPeriodDao().getPeriod(fy, month)
+        if (period != null && period.isClosed) {
+            require(entry.type == JournalEntryType.CLOSING.name) {
+                "Cannot post non-closing entry $entryId into closed period $fy-$month"
+            }
+        }
     }
 }

@@ -258,7 +258,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshDashboard() {
         viewModelScope.launch {
-            val todayEpoch = System.currentTimeMillis() / 86400000L
+            val todayEpoch = com.example.core.time.AppClock.todayEpochDay()
             val filter = selectedPeriodFilter.value
 
             val startEpoch: Long? = when (filter) {
@@ -318,7 +318,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // --- Action Methods ---
 
     private fun getLocalNow(): java.time.LocalDate {
-        return java.time.LocalDate.now(java.time.ZoneId.systemDefault())
+        return com.example.core.time.AppClock.todayLocalDate()
     }
 
     fun postQuickSale(
@@ -554,7 +554,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         viewModelScope.launch {
             try {
-                val now = java.time.LocalDate.now()
+                val now = com.example.core.time.AppClock.todayLocalDate()
                 writer.postCapitalReceipt(
                     targetAccountCode = AccountConstants.CAPITAL,
                     partnerPartyId = partnerPartyId,
@@ -589,7 +589,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         viewModelScope.launch {
             try {
-                val now = java.time.LocalDate.now()
+                val now = com.example.core.time.AppClock.todayLocalDate()
                 writer.postInKindCapitalContribution(
                     partnerPartyId = partnerPartyId,
                     assetName = assetName,
@@ -622,7 +622,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         viewModelScope.launch {
             try {
-                val now = java.time.LocalDate.now()
+                val now = com.example.core.time.AppClock.todayLocalDate()
                 writer.postMultiAssetInKindCapitalContribution(
                     partnerPartyId = partnerPartyId,
                     assets = assets,
@@ -1050,8 +1050,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun reconcileTreasuryCash(treasuryId: String, actualCountMinor: Long, notes: String, onSuccess: () -> Unit) {
         viewModelScope.launch {
             try {
-                val today = System.currentTimeMillis() / 86400000L
-                val doc = writer.reconcileTreasuryCash(treasuryId, actualCountMinor, 2026, today, notes)
+                val today = com.example.core.time.AppClock.todayEpochDay()
+                val fy = com.example.core.time.FiscalCalendar.fiscalYearOf(today)
+                val doc = writer.reconcileTreasuryCash(treasuryId, actualCountMinor, fy, today, notes)
                 if (doc != null) {
                     _userMessage.emit("تم تسجيل قيد تسوية فارق جرد الصندوق بنجاح")
                 } else {
@@ -1068,7 +1069,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun executeYearEndClosing(fiscalYear: Int, memo: String, onSuccess: () -> Unit) {
         viewModelScope.launch {
             try {
-                val closingDate = 20365L // End of year
+                val org = db.organizationDao().getOrganizationSync()
+                val calendar = com.example.core.time.FiscalCalendar(org?.fiscalYearStartMonth ?: 1)
+                val closingDate = calendar.yearEnd(fiscalYear)
                 writer.executeYearEndClosing(fiscalYear, closingDate, memo)
                 _userMessage.emit("تم الإقفال السنوي وترحيل الأرباح والخسائر لحساب الأرباح المرحّلة 3301")
                 refreshDashboard()
@@ -1248,9 +1251,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 var postedCount = 0
-                val now = java.time.LocalDate.now()
+                val now = com.example.core.time.AppClock.todayLocalDate()
                 val todayEpoch = now.toEpochDay()
-                val currentYear = now.year
+                val currentYear = com.example.core.time.FiscalCalendar.fiscalYearOf(todayEpoch)
                 val allVendors = db.partyDao().getAllPartiesSync()
 
                 for (draft in drafts) {

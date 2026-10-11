@@ -46,3 +46,18 @@
 - **Status:** Accepted
 - **Context:** Tax regulations and accounting standards forbid gaps or duplicate invoice numbers.
 - **Decision:** Document numbers are assigned inside `LedgerWriter` within the database transaction using an atomic `number_sequences` counter keyed by `(documentType, fiscalYear)`. Timestamps and random IDs are prohibited for document numbers.
+
+---
+
+## 7. ADR-006: Dedicated Journal Entry Numbering Sequence & Lineage
+- **Status:** Accepted
+- **Context:** Journal entry numbers collided across different document types when reusing document numbers, causing SQLite UNIQUE constraint violations.
+- **Decision:** A global, monotonic `JOURNAL_ENTRY` sequence is used for `entryNumber` across all journal entries regardless of source document type. Reversals and amendments link back via `reversalOfEntryId` and `reversalOfDocId` with incremented `revision`.
+
+---
+
+## 8. ADR-007: Unified Fiscal Calendar and Application Clock
+- **Status:** Accepted
+- **Context:** Hardcoded epoch offsets and system timezone drift caused date mismatches in financial reports and closing operations.
+- **Decision:** Use pure Kotlin `FiscalCalendar` respecting `fiscalYearStartMonth` and `AppClock` pinned to `Asia/Aden` (UTC+3) with injectable clocks for deterministic testing.
+

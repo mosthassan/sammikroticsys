@@ -727,7 +727,7 @@ fun NewPurchaseBottomSheet(
     var selectedZone by rememberSaveable { mutableStateOf(effectiveConfig.rateZone) }
     var rateInputText by rememberSaveable { mutableStateOf("1.0") }
     var isRateManuallyEdited by rememberSaveable { mutableStateOf(false) }
-    val today = remember { java.time.LocalDate.now().toEpochDay() }
+    val today = remember { com.example.core.time.AppClock.todayEpochDay() }
 
     LaunchedEffect(selectedCurrency, selectedZone, effectiveConfig) {
         when (selectedCurrency) {
