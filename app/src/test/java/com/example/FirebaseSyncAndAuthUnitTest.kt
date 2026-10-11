@@ -306,5 +306,168 @@ class FirebaseSyncAndAuthUnitTest {
         assertEquals(5, remoteMeta.networkDevicesCount)
         assertEquals(2, remoteMeta.currencyRatesCount)
     }
+
+    @Test
+    fun testRestoreDatabaseWithDuplicateAndZeroEntryNumbers(): Unit = kotlinx.coroutines.runBlocking {
+        val backupUseCase = com.example.domain.usecase.BackupRestoreUseCase(db = db, context = context)
+
+        // Seed default organization and accounts first
+        AppDatabase.installTriggers(db.openHelper.writableDatabase)
+        AppDatabase.seedDefaultData(db.openHelper.writableDatabase)
+
+        // JSON payload simulating legacy backup with duplicate and zero entry numbers
+        val legacyJson = """
+            {
+                "version": 4,
+                "exportedAt": ${System.currentTimeMillis()},
+                "parties": [
+                    {
+                        "id": "CUST_TEST",
+                        "name": "عميل تجريبي",
+                        "phone": "770000000",
+                        "isCustomer": true,
+                        "isVendor": false,
+                        "isPartner": false,
+                        "equityPercentageBasisPoints": 0,
+                        "creditLimitMinor": 0,
+                        "isActive": true
+                    }
+                ],
+                "documents": [
+                    {
+                        "id": "DOC_01",
+                        "type": "RECEIPT_VOUCHER",
+                        "fiscalYear": 2026,
+                        "docNumber": 0,
+                        "partyId": "CUST_TEST",
+                        "dateEpochDay": 20000,
+                        "currency": "YER",
+                        "exchangeRateMicros": 1000000,
+                        "rateZone": "SANAA",
+                        "rateSource": "SYSTEM_DAILY",
+                        "totalMinor": 5000,
+                        "totalBaseMinor": 5000,
+                        "status": "POSTED",
+                        "notes": "سند قبض 1"
+                    },
+                    {
+                        "id": "DOC_02",
+                        "type": "RECEIPT_VOUCHER",
+                        "fiscalYear": 2026,
+                        "docNumber": 0,
+                        "partyId": "CUST_TEST",
+                        "dateEpochDay": 20001,
+                        "currency": "YER",
+                        "exchangeRateMicros": 1000000,
+                        "rateZone": "SANAA",
+                        "rateSource": "SYSTEM_DAILY",
+                        "totalMinor": 10000,
+                        "totalBaseMinor": 10000,
+                        "status": "POSTED",
+                        "notes": "سند قبض 2"
+                    }
+                ],
+                "journal_entries": [
+                    {
+                        "id": "JE_01",
+                        "docId": "DOC_01",
+                        "entryNumber": 0,
+                        "entryDateEpochDay": 20000,
+                        "type": "NORMAL",
+                        "memo": "قيد 1",
+                        "createdAt": 1000
+                    },
+                    {
+                        "id": "JE_02",
+                        "docId": "DOC_02",
+                        "entryNumber": 0,
+                        "entryDateEpochDay": 20001,
+                        "type": "NORMAL",
+                        "memo": "قيد 2",
+                        "createdAt": 2000
+                    }
+                ],
+                "journal_lines": [
+                    {
+                        "id": "JL_01",
+                        "entryId": "JE_01",
+                        "lineNo": 1,
+                        "accountCode": "1101",
+                        "partyId": null,
+                        "treasuryId": "VAULT_MAIN_YER",
+                        "origMinor": 5000,
+                        "currency": "YER",
+                        "exchangeRateMicros": 1000000,
+                        "baseDebitMinor": 5000,
+                        "baseCreditMinor": 0,
+                        "memo": "مدين"
+                    },
+                    {
+                        "id": "JL_02",
+                        "entryId": "JE_01",
+                        "lineNo": 2,
+                        "accountCode": "1201",
+                        "partyId": "CUST_TEST",
+                        "treasuryId": null,
+                        "origMinor": 5000,
+                        "currency": "YER",
+                        "exchangeRateMicros": 1000000,
+                        "baseDebitMinor": 0,
+                        "baseCreditMinor": 5000,
+                        "memo": "دائن"
+                    },
+                    {
+                        "id": "JL_03",
+                        "entryId": "JE_02",
+                        "lineNo": 1,
+                        "accountCode": "1101",
+                        "partyId": null,
+                        "treasuryId": "VAULT_MAIN_YER",
+                        "origMinor": 10000,
+                        "currency": "YER",
+                        "exchangeRateMicros": 1000000,
+                        "baseDebitMinor": 10000,
+                        "baseCreditMinor": 0,
+                        "memo": "مدين"
+                    },
+                    {
+                        "id": "JL_04",
+                        "entryId": "JE_02",
+                        "lineNo": 2,
+                        "accountCode": "1201",
+                        "partyId": "CUST_TEST",
+                        "treasuryId": null,
+                        "origMinor": 10000,
+                        "currency": "YER",
+                        "exchangeRateMicros": 1000000,
+                        "baseDebitMinor": 0,
+                        "baseCreditMinor": 10000,
+                        "memo": "دائن"
+                    }
+                ]
+            }
+        """.trimIndent()
+
+        val result = backupUseCase.restoreDatabaseFromJson(legacyJson)
+        assertTrue("Restore must succeed without UNIQUE constraint exception: ${result.exceptionOrNull()?.message}", result.isSuccess)
+
+        // Verify entries in db
+        val entries = db.journalDao().getAllEntriesSync()
+        assertEquals(2, entries.size)
+        val numbers = entries.map { it.entryNumber }
+        assertTrue(numbers.all { it > 0 })
+        assertEquals(numbers.toSet().size, numbers.size)
+
+        // Verify documents have valid unique doc numbers
+        val docs = db.documentDao().getAllDocumentsSync()
+        assertEquals(2, docs.size)
+        assertTrue(docs.all { it.docNumber > 0 })
+        assertEquals(docs.map { it.docNumber }.toSet().size, docs.size)
+
+        // Verify number sequence updated above entries
+        val seq = db.numberSequenceDao().getSequence("JOURNAL_ENTRY", 0)
+        assertNotNull(seq)
+        assertTrue((seq?.nextValue ?: 0) > entries.maxOf { it.entryNumber })
+    }
 }
 
