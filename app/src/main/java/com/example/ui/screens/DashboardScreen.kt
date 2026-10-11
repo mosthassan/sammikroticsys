@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import android.app.Activity
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,6 +20,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import com.example.R
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.AccountCircle
@@ -127,16 +131,23 @@ fun DashboardScreen(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(42.dp)
-                            .clip(CircleShape)
-                            .background(BrandCyanPrimary.copy(alpha = 0.15f)),
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(
+                                1.5.dp,
+                                BrandCyanPrimary.copy(alpha = 0.8f),
+                                RoundedCornerShape(12.dp)
+                            )
+                            .background(Color(0xFF06122B)),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Router,
-                            contentDescription = null,
-                            tint = BrandCyanPrimary,
-                            modifier = Modifier.size(24.dp)
+                        Image(
+                            painter = painterResource(id = R.drawable.sammikrotik_ai_logo_1791682432718),
+                            contentDescription = "شعار سام ميكروتك 2026",
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(RoundedCornerShape(12.dp)),
+                            contentScale = ContentScale.Crop
                         )
                     }
                     Spacer(modifier = Modifier.width(12.dp))
