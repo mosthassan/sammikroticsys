@@ -17,9 +17,11 @@ import com.example.data.auth.UserSession
 import com.example.data.sync.FirebaseSyncManager
 import com.example.data.sync.FirestoreSyncManager
 import com.example.data.sync.SyncLogItem
+import com.example.data.sync.ChunkedBackupManager
 import com.example.data.sync.SyncMetadata
 import com.example.data.sync.SyncState
 import com.example.data.sync.SyncStatus
+import com.example.data.ledger.InKindAssetItem
 import com.example.data.ledger.InvariantCheckResult
 import com.example.data.ledger.InvoiceAllocationSpec
 import com.example.data.ledger.PaymentVoucherType
@@ -514,6 +516,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         currency: CurrencyCode,
         exchangeRate: ExchangeRate,
         notes: String,
+        rateZone: RateZone = RateZone.DEFAULT,
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
@@ -528,7 +531,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     amountOrigMinor = amountOrigMinor,
                     currency = currency,
                     exchangeRate = exchangeRate,
-                    notes = notes
+                    notes = notes,
+                    rateZone = rateZone
                 )
                 _userMessage.emit("تم تسجيل سند مساهمة رأس المال بنجاح")
                 refreshDashboard()
@@ -547,6 +551,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         exchangeRate: ExchangeRate,
         usefulLifeMonths: Int,
         notes: String,
+        rateZone: RateZone = RateZone.DEFAULT,
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
@@ -561,13 +566,65 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     currency = currency,
                     exchangeRate = exchangeRate,
                     usefulLifeMonths = usefulLifeMonths,
-                    notes = notes
+                    notes = notes,
+                    rateZone = rateZone
                 )
                 _userMessage.emit("تم ترحيل المساهمة العينية وقيد الأصل الثابت بنجاح")
                 refreshDashboard()
                 onSuccess()
             } catch (e: Exception) {
                 _userMessage.emit("فشل تسجيل المساهمة العينية: ${e.message}")
+            }
+        }
+    }
+
+    fun postMultiAssetInKindCapitalContribution(
+        partnerPartyId: String,
+        assets: List<InKindAssetItem>,
+        currency: CurrencyCode,
+        exchangeRate: ExchangeRate,
+        notes: String = "",
+        rateZone: RateZone = RateZone.DEFAULT,
+        onSuccess: () -> Unit
+    ) {
+        viewModelScope.launch {
+            try {
+                val now = java.time.LocalDate.now()
+                writer.postMultiAssetInKindCapitalContribution(
+                    partnerPartyId = partnerPartyId,
+                    assets = assets,
+                    fiscalYear = now.year,
+                    dateEpochDay = now.toEpochDay(),
+                    currency = currency,
+                    exchangeRate = exchangeRate,
+                    notes = notes,
+                    rateZone = rateZone
+                )
+                _userMessage.emit("تم تسجيل مساهمة الأصول العينية بنجاح")
+                refreshDashboard()
+                onSuccess()
+            } catch (e: Exception) {
+                _userMessage.emit("فشل تسجيل مساهمة الأصول: ${e.message}")
+            }
+        }
+    }
+
+    fun purgeCloudData() {
+        val user = currentUser.value
+        val uid = user?.uid ?: ""
+        if (uid.isBlank()) {
+            viewModelScope.launch {
+                _userMessage.emit("يرجى تسجيل الدخول بحساب Google أولاً")
+            }
+            return
+        }
+        viewModelScope.launch {
+            val chunked = ChunkedBackupManager(getApplication(), db, backupRestoreUseCase)
+            val res = chunked.purgeAllCloudData(uid)
+            if (res.isSuccess) {
+                _userMessage.emit("تم حذف كافة البيانات السحابية بنجاح")
+            } else {
+                _userMessage.emit("فشل حذف البيانات السحابية: ${res.exceptionOrNull()?.localizedMessage}")
             }
         }
     }
