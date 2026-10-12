@@ -302,7 +302,7 @@ class BackupRestoreUseCase(
             obj.put("model", d.model)
             obj.put("managementPort", d.managementPort)
             obj.put("subnet", d.subnet)
-            obj.put("credentials", d.credentials)
+            obj.put("credentials", "") // Security rule: Device passwords/secrets are never exported
             devArr.put(obj)
         }
         root.put("network_devices", devArr)

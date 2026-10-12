@@ -24,8 +24,10 @@ android {
     applicationId = "com.samtecai.sammikrotic"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    val vCode = (project.findProperty("VERSION_CODE") as? String)?.toIntOrNull() ?: 1
+    val vName = (project.findProperty("VERSION_NAME") as? String) ?: "1.0.0"
+    versionCode = vCode
+    versionName = vName
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -135,7 +137,7 @@ dependencies {
   implementation(libs.googleid)
   implementation(libs.play.services.auth)
   implementation(libs.firebase.appcheck.recaptcha)
-  implementation(libs.firebase.appcheck.debug)
+  debugImplementation(libs.firebase.appcheck.debug)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.logging.interceptor)

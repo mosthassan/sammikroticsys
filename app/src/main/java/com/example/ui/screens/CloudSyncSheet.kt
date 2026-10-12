@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.CloudQueue
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
@@ -130,12 +131,12 @@ fun CloudSyncSheet(
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
                         Text(
-                            text = "المزامنة السحابية ودخول Google",
+                            text = "النسخ الاحتياطي السحابي ودخول Google",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Firebase Firestore • عزل متعدد المستأجرين",
+                            text = "Firebase Firestore • عزل المستخدم المشفر",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -245,6 +246,44 @@ fun CloudSyncSheet(
                                 text = "تسجيل الخروج من حساب Google",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+                        if (showDeleteConfirmDialog) {
+                            AlertDialog(
+                                onDismissRequest = { showDeleteConfirmDialog = false },
+                                title = { Text("حذف كافة البيانات السحابية") },
+                                text = { Text("هل أنت متأكد من رغبتك في حذف كافة النسخ الاحتياطية السحابية الخاصة بحسابك نهائياً؟ هذا الإجراء لا يمكن التراجع عنه.") },
+                                confirmButton = {
+                                    Button(
+                                        onClick = {
+                                            showDeleteConfirmDialog = false
+                                            viewModel.purgeCloudData()
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = SemanticExpenseRed)
+                                    ) {
+                                        Text("تأكيد الحذف النهائي")
+                                    }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = { showDeleteConfirmDialog = false }) {
+                                        Text("إلغاء")
+                                    }
+                                }
+                            )
+                        }
+
+                        TextButton(
+                            onClick = { showDeleteConfirmDialog = true },
+                            modifier = Modifier.fillMaxWidth().testTag("btn_purge_cloud_data")
+                        ) {
+                            Text(
+                                text = "حذف كافة النسخ الاحتياطية السحابية من الخادم نهائياً",
+                                color = SemanticExpenseRed.copy(alpha = 0.8f),
+                                fontSize = 12.sp
                             )
                         }
                     } else {

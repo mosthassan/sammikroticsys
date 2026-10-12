@@ -61,3 +61,20 @@
 - **Context:** Hardcoded epoch offsets and system timezone drift caused date mismatches in financial reports and closing operations.
 - **Decision:** Use pure Kotlin `FiscalCalendar` respecting `fiscalYearStartMonth` and `AppClock` pinned to `Asia/Aden` (UTC+3) with injectable clocks for deterministic testing.
 
+
+---
+
+## 9. ADR-008: Chunked Cloud Backup Strategy (v1)
+- **Status:** Accepted
+- **Context:** Firestore documents have a strict 1MB size limit. Storing a complete relational database in a single document fails when transaction volume grows. Real-time multi-device sync is a distinct, complex phase that requires operational transformation or conflict-free replicated data types.
+- **Decision:**
+  1. The feature is formally named **"Cloud Backup" (النسخ الاحتياطي السحابي)**, avoiding misleading "Sync" claims in v1.
+  2. Backups are exported to GZIP-compressed JSON, split into chunks of maximum 500KB, and stored under:
+     `users/{uid}/backups/{backupId}/chunks/{chunkIndex}`
+  3. A companion `manifest` document stores metadata:
+     - `backupId`, `createdAt`, `deviceId`, `appVersion`, `dbSchemaVersion`, `chunkCount`, `sha256`, entity counts (documents, entries, parties), and `lastEntryNumber`.
+  4. Only the most recent 5 backups are retained per user; older backups are automatically pruned.
+  5. Backups undergo integrity validation (`LedgerInvariants.verifyAll()`) before upload and immediately after reassembly upon restore.
+  6. Restoring creates a local safety snapshot before writing, requires explicit user confirmation, and rejects backups created with newer schema versions (`dbSchemaVersion > current`).
+  7. Device passwords/secrets are explicitly stripped and never exported to cloud backups.
+  8. Cloud data deletion is supported via user-initiated purge of all `users/{uid}/**` documents.
