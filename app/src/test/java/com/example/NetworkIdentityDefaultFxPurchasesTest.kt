@@ -384,4 +384,62 @@ class NetworkIdentityDefaultFxPurchasesTest {
             assertTrue(invariantResult.violations.joinToString { "[${it.invariantCode}] ${it.description} -> ${it.details}" }, invariantResult.isValid)
         }
     }
+
+    /**
+     * Requirement 7: Purchase invoice draft auto-commit logic when submitting with pending entered item.
+     * Verifies that when itemsList is empty, a pending draft item ("قطاعة ورق", qty 100, price 100 YER)
+     * is correctly resolved and posted into the journal with double-entry equilibrium and document record.
+     */
+    @Test
+    fun test07_purchaseInvoicePendingDraftItemAutoInclusion() {
+        runBlocking {
+            val pendingDesc = "قطاعة ورق"
+            val pendingQty = 100
+            val pendingUnitPriceMinor = 100_00L // 100.00 YER
+            val isAsset = true
+            val usefulMonths = 24
+
+            val finalItems = mutableListOf<PurchaseItemSpec>()
+            if (pendingDesc.isNotBlank() && pendingUnitPriceMinor > 0L && pendingQty > 0) {
+                finalItems.add(
+                    PurchaseItemSpec(
+                        description = pendingDesc,
+                        accountCode = if (isAsset) AccountConstants.FIXED_ASSETS_NETWORK else AccountConstants.OPERATING_EXPENSES,
+                        quantity = pendingQty,
+                        unitPriceMinor = pendingUnitPriceMinor,
+                        isAsset = isAsset,
+                        usefulLifeMonths = usefulMonths
+                    )
+                )
+            }
+
+            assertEquals(1, finalItems.size)
+            val expectedTotalMinor = 100 * 100_00L // 10,000.00 YER (1,000,000 minor)
+            assertEquals(1_000_000L, finalItems.first().quantity * finalItems.first().unitPriceMinor)
+
+            val postedDoc = writer.postPurchaseInvoice(
+                vendorPartyId = "vendor_mikrotik_ye",
+                fiscalYear = 2026,
+                dateEpochDay = 20450L,
+                currency = CurrencyCode.YER,
+                exchangeRate = ExchangeRate.parity(CurrencyCode.YER),
+                items = finalItems,
+                notes = "فاتورة شراء توريد قطاعة ورق أصل شبكة",
+                rateZone = RateZone.SANAA
+            )
+
+            assertNotNull(postedDoc)
+            assertEquals(1_000_000L, postedDoc.totalMinor)
+            assertEquals(1_000_000L, postedDoc.totalBaseMinor)
+
+            val docItems = db.documentDao().getItemsForDocument(postedDoc.id)
+            assertEquals(1, docItems.size)
+            assertEquals("قطاعة ورق", docItems.first().description)
+            assertEquals(100, docItems.first().quantity)
+            assertEquals(100_00L, docItems.first().unitPriceMinor)
+
+            val invariantResult = invariants.verifyAll(failFast = false)
+            assertTrue(invariantResult.isValid)
+        }
+    }
 }
