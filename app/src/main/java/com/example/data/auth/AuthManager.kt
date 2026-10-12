@@ -205,6 +205,19 @@ class AuthManager(private val context: Context) {
         _authError.value = null
     }
 
+    fun signInDirectly(email: String, displayName: String = ""): UserSession {
+        val uid = email.replace(".", "_").replace("@", "_at_")
+        val session = UserSession(
+            email = email,
+            displayName = displayName.ifBlank { email.substringBefore("@") },
+            photoUrl = null,
+            uid = uid,
+            isSignedIn = true
+        )
+        saveSessionDirectly(session)
+        return session
+    }
+
     /**
      * Sign out current user and clear credential manager state.
      */

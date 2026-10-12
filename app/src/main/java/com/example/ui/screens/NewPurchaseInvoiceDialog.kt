@@ -43,6 +43,11 @@ import androidx.compose.material.icons.filled.CurrencyExchange
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Inventory
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowCompat
+import com.example.core.time.AppClock
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.PointOfSale
@@ -177,7 +182,7 @@ fun NewPurchaseInvoiceDialog(
     var isManualRateOverride by rememberSaveable { mutableStateOf(false) }
     var manualRateReason by rememberSaveable { mutableStateOf("") }
 
-    val today = remember { java.time.LocalDate.now().toEpochDay() }
+    val today = remember { AppClock.todayEpochDay() }
 
     // Dynamic rate resolution when currency or rate zone toggles
     LaunchedEffect(selectedCurrency, selectedZone, effectiveConfig) {
@@ -252,6 +257,12 @@ fun NewPurchaseInvoiceDialog(
     // Safety Prompt State
     var showCloseConfirmDialog by remember { mutableStateOf(false) }
 
+    val pendingQty = (itemQtyText.toIntOrNull() ?: 1).coerceAtLeast(1)
+    val pendingPriceMinor = Money.parseFromUserInput(itemPriceText, selectedCurrency)?.minor ?: 0L
+    val pendingDesc = selectedPackage?.name ?: itemDesc.trim()
+    val hasPendingValidDraft = pendingDesc.isNotBlank() && pendingPriceMinor > 0L && pendingQty > 0
+    val pendingRowTotalMinor = if (hasPendingValidDraft) pendingQty * pendingPriceMinor else 0L
+
     val hasDraftData = itemsList.isNotEmpty() || itemDesc.isNotBlank() || notes.isNotBlank()
 
     val totalForeignMinor = itemsList.sumOf { it.quantity * it.unitPriceMinor }
@@ -261,18 +272,66 @@ fun NewPurchaseInvoiceDialog(
         effectiveRate.convert(totalForeignMinor)
     }
 
-    val partialPaidMinor: Long = remember(partialPaidAmountText, selectedCurrency, totalForeignMinor, paymentMode) {
+    val effectiveItemCount = itemsList.size + (if (hasPendingValidDraft) 1 else 0)
+    val effectiveTotalForeignMinor = totalForeignMinor + pendingRowTotalMinor
+    val effectiveTotalYerMinor = if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
+        effectiveTotalForeignMinor
+    } else {
+        effectiveRate.convert(effectiveTotalForeignMinor)
+    }
+
+    val partialPaidMinor: Long = remember(partialPaidAmountText, selectedCurrency, effectiveTotalForeignMinor, paymentMode) {
         when (paymentMode) {
             PurchasePaymentMode.ON_CREDIT -> 0L
-            PurchasePaymentMode.FULL_CASH -> totalForeignMinor
+            PurchasePaymentMode.FULL_CASH -> effectiveTotalForeignMinor
             PurchasePaymentMode.PARTIAL_CASH -> {
                 val entered = Money.parseFromUserInput(partialPaidAmountText, selectedCurrency)?.minor ?: 0L
-                entered.coerceIn(0L, totalForeignMinor)
+                entered.coerceIn(0L, effectiveTotalForeignMinor)
             }
         }
     }
 
-    val remainingPayableMinor = (totalForeignMinor - partialPaidMinor).coerceAtLeast(0L)
+    val remainingPayableMinor = (effectiveTotalForeignMinor - partialPaidMinor).coerceAtLeast(0L)
+
+    val canSubmit = effectiveItemCount > 0 && (!isManualRateOverride || manualRateReason.isNotBlank())
+
+    val performSubmit: () -> Unit = {
+        val finalItems = itemsList.toMutableList()
+        if (hasPendingValidDraft) {
+            val m = usefulMonthsText.toIntOrNull() ?: 24
+            val code = if (isFixedAsset) AccountConstants.FIXED_ASSETS_NETWORK else AccountConstants.OPERATING_EXPENSES
+            finalItems.add(PurchaseItemSpec(pendingDesc, code, pendingQty, pendingPriceMinor, isFixedAsset, m))
+        }
+
+        if (finalItems.isNotEmpty() && (!isManualRateOverride || manualRateReason.isNotBlank())) {
+            val rate = if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
+                ExchangeRate.parity(CurrencyCode.FUNCTIONAL)
+            } else {
+                effectiveRate
+            }
+            val source = if (isManualRateOverride) RateSource.MANUAL_OVERRIDE else RateSource.SYSTEM_DAILY
+            val isCash = paymentMode != PurchasePaymentMode.ON_CREDIT
+            val cashAmount = partialPaidMinor
+            val trId = if (isCash) selectedTreasuryId else null
+
+            val finalNotes = if (isManualRateOverride && manualRateReason.isNotBlank()) {
+                if (notes.isBlank()) "سعر صرف استثنائي: $manualRateReason" else "$notes (سعر صرف استثنائي: $manualRateReason)"
+            } else notes
+
+            onSubmit(
+                selectedVendorId,
+                selectedCurrency,
+                rate,
+                finalItems,
+                finalNotes,
+                selectedZone,
+                source,
+                isCash,
+                cashAmount,
+                trId
+            )
+        }
+    }
 
     val scrollState = rememberScrollState()
 
@@ -339,6 +398,19 @@ fun NewPurchaseInvoiceDialog(
             dismissOnClickOutside = false
         )
     ) {
+        val dialogView = LocalView.current
+        DisposableEffect(dialogView) {
+            var parent = dialogView.parent
+            while (parent != null) {
+                if (parent is DialogWindowProvider) {
+                    WindowCompat.setDecorFitsSystemWindows(parent.window, false)
+                    break
+                }
+                parent = parent.parent
+            }
+            onDispose {}
+        }
+
         Surface(
             modifier = Modifier
                 .fillMaxSize()
@@ -349,7 +421,6 @@ fun NewPurchaseInvoiceDialog(
                 modifier = Modifier
                     .fillMaxSize()
                     .statusBarsPadding()
-                    .navigationBarsPadding()
                     .imePadding()
             ) {
                 // 1. HEADER TOOLBAR
@@ -361,7 +432,7 @@ fun NewPurchaseInvoiceDialog(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -371,71 +442,96 @@ fun NewPurchaseInvoiceDialog(
                                     if (hasDraftData) showCloseConfirmDialog = true else onDismiss()
                                 },
                                 modifier = Modifier
-                                    .size(40.dp)
+                                    .size(38.dp)
                                     .testTag("btn_close_purchase_dialog")
                             ) {
                                 Icon(
                                     Icons.Default.Close,
                                     contentDescription = "إغلاق الفاتورة",
                                     tint = TextSecondaryDark,
-                                    modifier = Modifier.size(22.dp)
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
                             Surface(
                                 color = MikroTikCyan.copy(alpha = 0.15f),
                                 shape = RoundedCornerShape(10.dp),
-                                modifier = Modifier.size(38.dp)
+                                border = BorderStroke(1.dp, MikroTikCyan.copy(alpha = 0.4f)),
+                                modifier = Modifier.size(36.dp)
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
                                         Icons.Default.ShoppingCart,
                                         contentDescription = null,
                                         tint = MikroTikCyan,
-                                        modifier = Modifier.size(20.dp)
+                                        modifier = Modifier.size(18.dp)
                                     )
                                 }
                             }
-                            Spacer(modifier = Modifier.width(10.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
                             Column {
                                 Text(
                                     text = "فاتورة مشتريات وتوريد",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
-                                    color = TextPrimaryDark
+                                    color = TextPrimaryDark,
+                                    fontSize = 15.sp
                                 )
                                 Text(
                                     text = "نظام المشتريات ومعدات الشبكة والأصول",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = TextSecondaryDark,
-                                    fontSize = 11.sp
+                                    fontSize = 10.sp
                                 )
                             }
                         }
 
-                        // Right Badge: items count
-                        Surface(
-                            color = if (itemsList.isNotEmpty()) MikroTikCyan.copy(alpha = 0.2f) else CyberDarkCardElevated,
-                            shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(1.dp, if (itemsList.isNotEmpty()) MikroTikCyan else CyberBorder)
+                        // Right section: Item counter chip + Quick Save button
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                            Surface(
+                                color = if (effectiveItemCount > 0) MikroTikCyan.copy(alpha = 0.18f) else CyberDarkCardElevated,
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, if (effectiveItemCount > 0) MikroTikCyan.copy(alpha = 0.6f) else CyberBorder)
                             ) {
-                                Icon(
-                                    Icons.Default.Inventory,
-                                    contentDescription = null,
-                                    tint = if (itemsList.isNotEmpty()) MikroTikCyan else TextMutedDark,
-                                    modifier = Modifier.size(14.dp)
-                                )
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.Inventory,
+                                        contentDescription = null,
+                                        tint = if (effectiveItemCount > 0) MikroTikCyan else TextMutedDark,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "$effectiveItemCount أصناف",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp,
+                                        color = if (effectiveItemCount > 0) MikroTikCyan else TextMutedDark
+                                    )
+                                }
+                            }
+
+                            Button(
+                                onClick = { performSubmit() },
+                                enabled = canSubmit,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (canSubmit) MikroTikCyan else CyberDarkCardElevated,
+                                    contentColor = if (canSubmit) CyberDarkCanvas else TextMutedDark
+                                ),
+                                shape = RoundedCornerShape(10.dp),
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                                modifier = Modifier
+                                    .height(36.dp)
+                                    .testTag("btn_quick_save_purchase_invoice")
+                            ) {
+                                Icon(Icons.Default.Check, contentDescription = "حفظ", modifier = Modifier.size(15.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "${itemsList.size} أصناف",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 11.sp,
-                                    color = if (itemsList.isNotEmpty()) MikroTikCyan else TextMutedDark
-                                )
+                                Text("حفظ", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                             }
                         }
                     }
@@ -1014,11 +1110,11 @@ fun NewPurchaseInvoiceDialog(
                                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // Quantity with +/- stepper
+                                // Ergonomic Quantity with +/- stepper
                                 Surface(
                                     color = CyberDarkCardElevated,
                                     shape = RoundedCornerShape(12.dp),
-                                    border = BorderStroke(1.dp, CyberBorder),
+                                    border = BorderStroke(1.dp, if (hasPendingValidDraft) MikroTikCyan.copy(alpha = 0.5f) else CyberBorder),
                                     modifier = Modifier.weight(1.1f)
                                 ) {
                                     Row(
@@ -1031,7 +1127,7 @@ fun NewPurchaseInvoiceDialog(
                                                 val curr = itemQtyText.toIntOrNull() ?: 1
                                                 if (curr > 1) itemQtyText = (curr - 1).toString()
                                             },
-                                            modifier = Modifier.size(36.dp)
+                                            modifier = Modifier.size(38.dp)
                                         ) {
                                             Icon(Icons.Default.Remove, contentDescription = "تقليل الكمية", tint = TextSecondaryDark, modifier = Modifier.size(16.dp))
                                         }
@@ -1041,7 +1137,7 @@ fun NewPurchaseInvoiceDialog(
                                             OutlinedTextField(
                                                 value = itemQtyText,
                                                 onValueChange = { itemQtyText = it.filter { ch -> ch.isDigit() } },
-                                                textStyle = MaterialTheme.typography.bodyMedium.copy(textAlign = TextAlign.Center, fontWeight = FontWeight.Bold, color = TextPrimaryDark),
+                                                textStyle = MaterialTheme.typography.bodyMedium.copy(textAlign = TextAlign.Center, fontWeight = FontWeight.Bold, color = MikroTikCyan),
                                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                                 colors = OutlinedTextFieldDefaults.colors(
                                                     focusedBorderColor = Color.Transparent,
@@ -1056,7 +1152,7 @@ fun NewPurchaseInvoiceDialog(
                                                 val curr = itemQtyText.toIntOrNull() ?: 1
                                                 itemQtyText = (curr + 1).toString()
                                             },
-                                            modifier = Modifier.size(36.dp)
+                                            modifier = Modifier.size(38.dp)
                                         ) {
                                             Icon(Icons.Default.Add, contentDescription = "زيادة الكمية", tint = MikroTikCyan, modifier = Modifier.size(16.dp))
                                         }
@@ -1076,6 +1172,39 @@ fun NewPurchaseInvoiceDialog(
                                     ),
                                     modifier = Modifier.weight(1.3f).testTag("input_item_price")
                                 )
+                            }
+
+                            // Dynamic subtotal preview when typing an item
+                            if (hasPendingValidDraft) {
+                                Surface(
+                                    color = MikroTikCyan.copy(alpha = 0.12f),
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = BorderStroke(1.dp, MikroTikCyan.copy(alpha = 0.4f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.ShoppingCart, contentDescription = null, tint = MikroTikCyan, modifier = Modifier.size(15.dp))
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = "إجمالي الصنف الحالي ($pendingQty قطعة):",
+                                                fontSize = 11.sp,
+                                                color = TextPrimaryDark,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                        Text(
+                                            text = Money(pendingRowTotalMinor, selectedCurrency).format(),
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MikroTikCyan
+                                        )
+                                    }
+                                }
                             }
 
                             // Fixed Asset or Operating Expense Toggle Card
@@ -1131,10 +1260,10 @@ fun NewPurchaseInvoiceDialog(
                                 }
                             }
 
-                            // Add Item Button
+                            // Add Item Button with dynamic badge
                             Button(
                                 onClick = {
-                                    val q = itemQtyText.toIntOrNull() ?: 1
+                                    val q = (itemQtyText.toIntOrNull() ?: 1).coerceAtLeast(1)
                                     val p = Money.parseFromUserInput(itemPriceText, selectedCurrency)?.minor ?: 0L
                                     val m = usefulMonthsText.toIntOrNull() ?: 24
                                     val code = if (isFixedAsset) AccountConstants.FIXED_ASSETS_NETWORK else AccountConstants.OPERATING_EXPENSES
@@ -1146,45 +1275,101 @@ fun NewPurchaseInvoiceDialog(
                                     selectedPackageId = ""
                                     itemDesc = ""
                                     itemQtyText = "1"
+                                    itemPriceText = "100"
                                 },
                                 enabled = selectedPackage != null || itemDesc.isNotBlank() || itemsList.isEmpty(),
-                                colors = ButtonDefaults.buttonColors(containerColor = MikroTikPrimary),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (hasPendingValidDraft) MikroTikCyan else MikroTikPrimary,
+                                    contentColor = if (hasPendingValidDraft) CyberDarkCanvas else Color.White
+                                ),
                                 shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier.fillMaxWidth().height(48.dp).testTag("btn_add_purchase_item_row")
                             ) {
                                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("إدراج الصنف في الفاتورة", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Text(
+                                    text = if (hasPendingValidDraft) {
+                                        "إدراج الصنف في الفاتورة (${Money(pendingRowTotalMinor, selectedCurrency).format()})"
+                                    } else {
+                                        "إدراج الصنف في الفاتورة"
+                                    },
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp
+                                )
                             }
                         }
                     }
 
-                    // SECTION 4: ITEMS CART (MODERN CARDS LIST)
-                    if (itemsList.isNotEmpty()) {
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = CyberDarkSurface),
-                            shape = RoundedCornerShape(16.dp),
-                            border = BorderStroke(1.dp, CyberBorder),
-                            modifier = Modifier.fillMaxWidth()
+                    // SECTION 4: ITEMS CART (MODERN CARDS LIST OR EMPTY STATE)
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = CyberDarkSurface),
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, if (itemsList.isNotEmpty()) CyberBorderGlow.copy(alpha = 0.3f) else CyberBorder),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Column(
-                                modifier = Modifier.padding(14.dp),
-                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text("جدول الأصناف المدرجة (${itemsList.size})", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = TextPrimaryDark)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Surface(
+                                        color = MikroTikCyan.copy(alpha = 0.15f),
+                                        shape = RoundedCornerShape(6.dp),
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(Icons.Default.Inventory, contentDescription = null, tint = MikroTikCyan, modifier = Modifier.size(14.dp))
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = Money(totalForeignMinor, selectedCurrency).format(),
+                                        text = "جدول الأصناف المدرجة (${itemsList.size} بنود - ${itemsList.sumOf { it.quantity }} قطعة)",
                                         fontWeight = FontWeight.Bold,
-                                        fontSize = 14.sp,
-                                        color = MikroTikCyan
+                                        fontSize = 13.sp,
+                                        color = TextPrimaryDark
                                     )
                                 }
+                                Text(
+                                    text = Money(totalForeignMinor, selectedCurrency).format(),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp,
+                                    color = MikroTikCyan
+                                )
+                            }
 
+                            if (itemsList.isEmpty()) {
+                                Surface(
+                                    color = CyberDarkCardElevated.copy(alpha = 0.5f),
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = BorderStroke(1.dp, CyberBorder),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(16.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(Icons.Default.Inventory, contentDescription = null, tint = TextMutedDark, modifier = Modifier.size(26.dp))
+                                        Text(
+                                            text = if (hasPendingValidDraft) "يوجد صنف قيد الإدخال حالياً أعلاه" else "لم يتم إدراج أصناف في الجدول بعد",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            color = if (hasPendingValidDraft) MikroTikCyan else TextSecondaryDark
+                                        )
+                                        Text(
+                                            text = if (hasPendingValidDraft) "اضغط 'إدراج الصنف في الفاتورة' أو اضغط 'حفظ' لاعتماده تلقائياً" else "أدخل بيانات الصنف واضغط على إدراج لإضافته لجدول الفاتورة",
+                                            fontSize = 11.sp,
+                                            color = TextMutedDark,
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
+                                }
+                            } else {
                                 itemsList.forEachIndexed { idx, itm ->
                                     val rowTotal = itm.quantity * itm.unitPriceMinor
                                     val rowTotalYer = if (selectedCurrency == CurrencyCode.FUNCTIONAL) rowTotal else effectiveRate.convert(rowTotal)
@@ -1202,6 +1387,16 @@ fun NewPurchaseInvoiceDialog(
                                         ) {
                                             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                                 Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Surface(
+                                                        color = CyberDarkCanvas,
+                                                        shape = CircleShape,
+                                                        modifier = Modifier.size(20.dp)
+                                                    ) {
+                                                        Box(contentAlignment = Alignment.Center) {
+                                                            Text("${idx + 1}", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TextSecondaryDark)
+                                                        }
+                                                    }
+                                                    Spacer(modifier = Modifier.width(6.dp))
                                                     Text(
                                                         text = itm.description,
                                                         fontWeight = FontWeight.Bold,
@@ -1254,7 +1449,35 @@ fun NewPurchaseInvoiceDialog(
                                                 }
                                             }
 
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                                                IconButton(
+                                                    onClick = {
+                                                        if (itm.quantity > 1) {
+                                                            itemsList[idx] = itm.copy(quantity = itm.quantity - 1)
+                                                        } else {
+                                                            itemsList.removeAt(idx)
+                                                        }
+                                                    },
+                                                    modifier = Modifier.size(30.dp)
+                                                ) {
+                                                    Icon(Icons.Default.Remove, contentDescription = "تقليل", tint = TextSecondaryDark, modifier = Modifier.size(14.dp))
+                                                }
+                                                Text(
+                                                    text = "${itm.quantity}",
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MikroTikCyan,
+                                                    fontSize = 12.sp,
+                                                    modifier = Modifier.padding(horizontal = 2.dp)
+                                                )
+                                                IconButton(
+                                                    onClick = {
+                                                        itemsList[idx] = itm.copy(quantity = itm.quantity + 1)
+                                                    },
+                                                    modifier = Modifier.size(30.dp)
+                                                ) {
+                                                    Icon(Icons.Default.Add, contentDescription = "زيادة", tint = MikroTikCyan, modifier = Modifier.size(14.dp))
+                                                }
+
                                                 IconButton(
                                                     onClick = {
                                                         val itmToEdit = itemsList.removeAt(idx)
@@ -1267,15 +1490,15 @@ fun NewPurchaseInvoiceDialog(
                                                         isFixedAsset = itmToEdit.isAsset
                                                         usefulMonthsText = itmToEdit.usefulLifeMonths.toString()
                                                     },
-                                                    modifier = Modifier.size(34.dp).testTag("btn_edit_item_$idx")
+                                                    modifier = Modifier.size(32.dp).testTag("btn_edit_item_$idx")
                                                 ) {
-                                                    Icon(Icons.Default.Edit, contentDescription = "تعديل الصنف", tint = MikroTikCyan, modifier = Modifier.size(16.dp))
+                                                    Icon(Icons.Default.Edit, contentDescription = "تعديل الصنف", tint = MikroTikCyan, modifier = Modifier.size(15.dp))
                                                 }
                                                 IconButton(
                                                     onClick = { itemsList.removeAt(idx) },
-                                                    modifier = Modifier.size(34.dp).testTag("btn_delete_item_$idx")
+                                                    modifier = Modifier.size(32.dp).testTag("btn_delete_item_$idx")
                                                 ) {
-                                                    Icon(Icons.Default.Delete, contentDescription = "حذف الصنف", tint = SemanticExpenseRed, modifier = Modifier.size(16.dp))
+                                                    Icon(Icons.Default.Delete, contentDescription = "حذف الصنف", tint = SemanticExpenseRed, modifier = Modifier.size(15.dp))
                                                 }
                                             }
                                         }
@@ -1459,16 +1682,21 @@ fun NewPurchaseInvoiceDialog(
                         ),
                         modifier = Modifier.fillMaxWidth().testTag("input_purchase_notes")
                     )
+
+                    Spacer(modifier = Modifier.height(16.dp))
                 }
 
                 // 2. STICKY BOTTOM ACTION BAR (Ultra Modern POS Style)
                 Surface(
                     color = CyberDarkSurface,
                     border = BorderStroke(1.dp, CyberBorder),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(bottom = 10.dp)
                 ) {
                     Column(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         // Financial summary preview row
@@ -1478,13 +1706,30 @@ fun NewPurchaseInvoiceDialog(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = "إجمالي الفاتورة ($effectiveItemCount أصناف):",
+                                        fontSize = 11.sp,
+                                        color = TextSecondaryDark
+                                    )
+                                    if (hasPendingValidDraft && itemsList.isEmpty()) {
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Surface(
+                                            color = MikroTikCyan.copy(alpha = 0.15f),
+                                            shape = RoundedCornerShape(4.dp)
+                                        ) {
+                                            Text(
+                                                "يشمل الصنف الحالي",
+                                                fontSize = 9.sp,
+                                                color = MikroTikCyan,
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
                                 Text(
-                                    text = "إجمالي الفاتورة (${itemsList.size} أصناف):",
-                                    fontSize = 11.sp,
-                                    color = TextSecondaryDark
-                                )
-                                Text(
-                                    text = Money(totalForeignMinor, selectedCurrency).format(),
+                                    text = Money(effectiveTotalForeignMinor, selectedCurrency).format(),
                                     fontWeight = FontWeight.ExtraBold,
                                     fontSize = 20.sp,
                                     color = MikroTikCyan
@@ -1499,7 +1744,7 @@ fun NewPurchaseInvoiceDialog(
                                         color = TextSecondaryDark
                                     )
                                     Text(
-                                        text = Money(totalYerMinor, CurrencyCode.FUNCTIONAL).format(),
+                                        text = Money(effectiveTotalYerMinor, CurrencyCode.FUNCTIONAL).format(),
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 16.sp,
                                         color = SemanticIncomeGreen
@@ -1509,38 +1754,8 @@ fun NewPurchaseInvoiceDialog(
                         }
 
                         // Submit Button
-                        val canSubmit = itemsList.isNotEmpty() && (!isManualRateOverride || manualRateReason.isNotBlank())
                         Button(
-                            onClick = {
-                                if (canSubmit) {
-                                    val rate = if (selectedCurrency == CurrencyCode.FUNCTIONAL) {
-                                        ExchangeRate.parity(CurrencyCode.FUNCTIONAL)
-                                    } else {
-                                        effectiveRate
-                                    }
-                                    val source = if (isManualRateOverride) RateSource.MANUAL_OVERRIDE else RateSource.SYSTEM_DAILY
-                                    val isCash = paymentMode != PurchasePaymentMode.ON_CREDIT
-                                    val cashAmount = partialPaidMinor
-                                    val trId = if (isCash) selectedTreasuryId else null
-
-                                    val finalNotes = if (isManualRateOverride && manualRateReason.isNotBlank()) {
-                                        if (notes.isBlank()) "سعر صرف استثنائي: $manualRateReason" else "$notes (سعر صرف استثنائي: $manualRateReason)"
-                                    } else notes
-
-                                    onSubmit(
-                                        selectedVendorId,
-                                        selectedCurrency,
-                                        rate,
-                                        itemsList.toList(),
-                                        finalNotes,
-                                        selectedZone,
-                                        source,
-                                        isCash,
-                                        cashAmount,
-                                        trId
-                                    )
-                                }
-                            },
+                            onClick = { performSubmit() },
                             enabled = canSubmit,
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = if (canSubmit) MikroTikCyan else CyberDarkCardElevated,
@@ -1559,9 +1774,13 @@ fun NewPurchaseInvoiceDialog(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = if (itemsList.isEmpty()) "أضف أصنافاً لتفعيل الاعتماد" else "اعتماد وترحيل الفاتورة",
+                                text = when {
+                                    !canSubmit -> "أدخل صنفاً لتفعيل الاعتماد"
+                                    hasPendingValidDraft && itemsList.isEmpty() -> "إدراج الصنف واعتماد الفاتورة (${Money(effectiveTotalForeignMinor, selectedCurrency).format()})"
+                                    else -> "اعتماد وترحيل الفاتورة (${Money(effectiveTotalForeignMinor, selectedCurrency).format()})"
+                                },
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 15.sp
+                                fontSize = 14.sp
                             )
                         }
                     }

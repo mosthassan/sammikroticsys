@@ -71,8 +71,21 @@ class GoogleAuthManager(private val context: Context) {
                 isAuthenticated = true
             )
         } else {
-            prefs.edit().clear().apply()
-            _userProfile.value = null
+            val email = prefs.getString(KEY_USER_EMAIL, null)
+            val name = prefs.getString(KEY_USER_NAME, null)
+            val photo = prefs.getString(KEY_USER_PHOTO, null)
+            val uid = prefs.getString(KEY_USER_UID, null)
+            if (!email.isNullOrBlank()) {
+                _userProfile.value = UserProfile(
+                    email = email,
+                    displayName = name ?: email.substringBefore("@"),
+                    photoUrl = photo,
+                    uid = uid ?: email.replace(".", "_").replace("@", "_at_"),
+                    isAuthenticated = true
+                )
+            } else {
+                _userProfile.value = null
+            }
         }
     }
 
@@ -205,6 +218,19 @@ class GoogleAuthManager(private val context: Context) {
         }
         prefs.edit().clear().apply()
         _userProfile.value = null
+    }
+
+    fun signInDirectWithEmail(email: String, displayName: String = ""): UserProfile {
+        val profile = UserProfile(
+            email = email,
+            displayName = displayName.ifBlank { email.substringBefore("@") },
+            photoUrl = null,
+            uid = email.replace(".", "_").replace("@", "_at_"),
+            isAuthenticated = true
+        )
+        persistSession(profile)
+        _userProfile.value = profile
+        return profile
     }
 
     private fun persistSession(profile: UserProfile) {
