@@ -1,21 +1,33 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# Proguard / R8 Optimization & Obfuscation Rules for SamMikrotik
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Preserve line numbers and source files for readable stack traces
+-keepattributes SourceFile,LineNumberTable,*Annotation*,Signature,InnerClasses,EnclosingMethod
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# Room Database rules
+-keep class * extends androidx.room.RoomDatabase { *; }
+-keep @androidx.room.Entity class * { *; }
+-keep @androidx.room.Dao interface * { *; }
+-keep class * implements androidx.room.migration.Migration { *; }
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Moshi and JSON serialization
+-keepclassmembers class * {
+    @com.squareup.moshi.Json *;
+}
+-keep class com.squareup.moshi.** { *; }
+-keep class * extends com.squareup.moshi.JsonAdapter { *; }
+
+# Data & Backup models (crucial for JSON serialization/deserialization)
+-keep class com.example.data.local.entity.** { *; }
+-keep class com.example.data.sync.** { *; }
+-keep class com.example.domain.usecase.** { *; }
+-keep class com.example.core.model.** { *; }
+-keep class com.example.data.network.** { *; }
+-keep class com.example.util.** { *; }
+
+# Firebase & Play Services
+-keep class com.google.firebase.** { *; }
+-keep class com.google.android.gms.** { *; }
+
+# Coroutines
+-keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
+-keepnames class kotlinx.coroutines.CoroutineExceptionHandler {}
