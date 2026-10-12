@@ -227,7 +227,7 @@ fun DashboardScreen(
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = currentUser?.email ?: "mosthassan.ye@gmail.com",
+                                    text = currentUser?.email ?: "تسجيل الدخول للمزامنة",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = BrandCyanPrimary,
                                     fontWeight = FontWeight.SemiBold

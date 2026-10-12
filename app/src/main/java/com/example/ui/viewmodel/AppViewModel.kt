@@ -204,7 +204,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun triggerInitialCloudSyncOnLogin(user: UserSession) {
         viewModelScope.launch {
-            val safeUid = user.uid.ifBlank { syncManager.sanitizeTenantEmail(user.email) }
+            val safeUid = user.uid
+            if (safeUid.isBlank()) return@launch
             val docCount = db.documentDao().getAllDocumentsSync().size
             val linesCount = db.journalDao().getAllLinesSync().size
             val isNewDeviceOrEmpty = docCount == 0 && linesCount == 0
@@ -1297,7 +1298,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 val user = res.getOrNull()
                 _userMessage.emit("تم تسجيل الدخول بنجاح بحساب Google: ${user?.email}")
                 if (user != null) {
-                    googleAuthManager.signInDirectWithEmail(user.email, user.displayName)
                     triggerInitialCloudSyncOnLogin(user)
                 }
             } else {
@@ -1316,10 +1316,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     val credential = com.google.firebase.auth.GoogleAuthProvider.getCredential(idToken, null)
                     val authResult = com.google.firebase.auth.FirebaseAuth.getInstance().signInWithCredential(credential).await()
                     val fbUser = authResult.user
-                    val email = account.email ?: fbUser?.email ?: ""
-                    val displayName = account.displayName ?: fbUser?.displayName ?: email.substringBefore("@")
-                    val photoUrl = account.photoUrl?.toString() ?: fbUser?.photoUrl?.toString()
-                    val uid = fbUser?.uid ?: account.id ?: email.replace(".", "_").replace("@", "_at_")
+                    val email = fbUser?.email ?: account.email ?: ""
+                    val displayName = fbUser?.displayName ?: account.displayName ?: email.substringBefore("@")
+                    val photoUrl = fbUser?.photoUrl?.toString() ?: account.photoUrl?.toString()
+                    val uid = fbUser?.uid ?: ""
 
                     val session = UserSession(
                         email = email,
@@ -1329,7 +1329,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         isSignedIn = true
                     )
                     authManager.saveSessionDirectly(session)
-                    googleAuthManager.signInDirectWithEmail(email, displayName)
                     triggerInitialCloudSyncOnLogin(session)
                     _userMessage.emit("تم تسجيل الدخول بنجاح بحساب Google: $email")
                 } else {
@@ -1339,7 +1338,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 val statusCode = e.statusCode
                 android.util.Log.w("AppViewModel", "GoogleSignIn ApiException statusCode=$statusCode: ${e.message}")
                 if (statusCode == 10 || statusCode == 12500) {
-                    _userMessage.emit("تنبيه: فشل مطابقة شهادة SHA-1 في Firebase Console (Error $statusCode). يمكنك استخدام الدخول البديل بالبريد في بيئة الاختبار.")
+                    _userMessage.emit("تنبيه: تأكد من مطابقة شهادة SHA-1 في Firebase Console وشاشة موافقة OAuth (Error $statusCode).")
                 } else if (statusCode == 12501) {
                     _userMessage.emit("تم إلغاء اختيار الحساب")
                 } else {
@@ -1349,15 +1348,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 android.util.Log.e("AppViewModel", "GoogleSignIn error: ${e.message}", e)
                 _userMessage.emit("خطأ في تسجيل الدخول: ${e.localizedMessage ?: e.message}")
             }
-        }
-    }
-
-    fun signInDirectly(email: String, displayName: String = "") {
-        val user = authManager.signInDirectly(email, displayName)
-        googleAuthManager.signInDirectWithEmail(email, displayName)
-        viewModelScope.launch {
-            _userMessage.emit("تم تفعيل الحساب: ${user.email}")
-            triggerInitialCloudSyncOnLogin(user)
         }
     }
 
@@ -1526,7 +1516,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             if (res.isSuccess) {
                 val profile = res.getOrNull()
                 if (profile != null) {
-                    val user = authManager.signInDirectly(profile.email, profile.displayName)
+                    val user = UserSession(
+                        email = profile.email,
+                        displayName = profile.displayName,
+                        photoUrl = profile.photoUrl,
+                        uid = profile.uid,
+                        isSignedIn = true
+                    )
+                    authManager.saveSessionDirectly(user)
                     _userMessage.emit("تم تسجيل الدخول بنجاح بحساب Google: ${profile.email}")
                     triggerInitialCloudSyncOnLogin(user)
                 }
@@ -1535,11 +1532,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _userMessage.emit(err)
             }
         }
-    }
-
-    fun signInDirectWithEmail(email: String, displayName: String = "") {
-        googleAuthManager.signInDirectWithEmail(email, displayName)
-        signInDirectly(email, displayName)
     }
 
     fun signOutGoogle() {
@@ -1551,34 +1543,25 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun performCloudSync() {
-        val email = currentUserProfile.value?.email ?: currentUser.value?.email ?: "mosthassan.ye@gmail.com"
-        viewModelScope.launch {
-            val res = firebaseSyncManager.performFullSync(email)
-            if (res.isSuccess) {
-                val count = res.getOrNull() ?: 0
-                _userMessage.emit("اكتملت المزامنة السحابية بنجاح ($count سجل)")
-                refreshDashboard()
-            } else {
-                val err = res.exceptionOrNull()?.localizedMessage ?: "فشلت المزامنة السحابية"
-                _userMessage.emit(err)
+        val user = currentUser.value
+        if (user == null || !user.isSignedIn || user.uid.isBlank()) {
+            viewModelScope.launch {
+                _userMessage.emit("يرجى تسجيل الدخول بحساب Google أولاً للمزامنة السحابية")
             }
+            return
         }
+        syncPushToFirebase()
     }
 
     fun performCloudPull() {
-        val email = currentUserProfile.value?.email ?: currentUser.value?.email ?: "mosthassan.ye@gmail.com"
-        viewModelScope.launch {
-            val res = firebaseSyncManager.pullDataFromCloud(email)
-            if (res.isSuccess) {
-                val count = res.getOrNull() ?: 0
-                _userMessage.emit("تم جلب البيانات من السحاب بنجاح ($count سجل)")
-                refreshDashboard()
-                runInvariantCheck()
-            } else {
-                val err = res.exceptionOrNull()?.localizedMessage ?: "فشل جلب البيانات السحابية"
-                _userMessage.emit(err)
+        val user = currentUser.value
+        if (user == null || !user.isSignedIn || user.uid.isBlank()) {
+            viewModelScope.launch {
+                _userMessage.emit("يرجى تسجيل الدخول بحساب Google أولاً لاستعادة النسخة السحابية")
             }
+            return
         }
+        syncPullFromFirebase()
     }
 }
 

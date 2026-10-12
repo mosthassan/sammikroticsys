@@ -113,10 +113,10 @@ class FirestoreSyncManager(
         }
     }
 
-    fun sanitizeTenantEmail(email: String): String {
-        return email.trim().lowercase()
-            .replace(".", "_")
-            .replace("@", "_at_")
+    private fun resolveUid(explicitUid: String? = null): String {
+        return FirebaseAuth.getInstance().currentUser?.uid?.takeIf { it.isNotBlank() }
+            ?: explicitUid?.trim()?.takeIf { it.isNotBlank() }
+            ?: ""
     }
 
     /**
@@ -124,21 +124,14 @@ class FirestoreSyncManager(
      */
     suspend fun checkRemoteBackup(uid: String, userEmail: String): CloudBackupMeta? = withContext(Dispatchers.IO) {
         val fs = firestore ?: return@withContext null
-        val safeUid = uid.ifBlank { sanitizeTenantEmail(userEmail) }
+        val safeUid = resolveUid(uid)
         if (safeUid.isBlank()) return@withContext null
 
         try {
-            // Check primary user scoped path: users/{uid}/backup_latest/latest
-            var doc = fs.collection("users").document(safeUid)
+            // Check strictly under user-isolated path: users/{uid}/backup_latest/latest
+            val doc = fs.collection("users").document(safeUid)
                 .collection("backup_latest").document("latest")
                 .get().await()
-
-            if (!doc.exists() && userEmail.isNotBlank()) {
-                // Secondary check under tenant scope
-                doc = fs.collection("tenants").document(sanitizeTenantEmail(userEmail))
-                    .collection("snapshots").document("latest")
-                    .get().await()
-            }
 
             if (doc.exists()) {
                 val jsonContent = doc.getString("jsonContent")
@@ -187,11 +180,11 @@ class FirestoreSyncManager(
      * parties, documents, network devices, and organization identity) into Firestore under users/{uid}/backup_latest.
      */
     suspend fun syncPush(uid: String, userEmail: String): Result<String> = withContext(Dispatchers.IO) {
-        val safeUid = uid.ifBlank { sanitizeTenantEmail(userEmail) }
+        val safeUid = resolveUid(uid)
         if (safeUid.isBlank()) {
-            val err = "معرف المستخدم غير محدد، يرجى تسجيل الدخول أولاً"
+            val err = "يجب تسجيل الدخول بحساب Google أولاً لرفع النسخة السحابية"
             _syncState.value = SyncState.Error(err)
-            return@withContext Result.failure(IllegalArgumentException(err))
+            return@withContext Result.failure(IllegalStateException(err))
         }
 
         val fs = firestore
@@ -405,15 +398,7 @@ class FirestoreSyncManager(
                     .await()
             }
 
-            // Legacy / multi-tenant mirror if email is present
-            if (userEmail.isNotBlank()) {
-                val tenantKey = sanitizeTenantEmail(userEmail)
-                fs.collection("tenants").document(tenantKey)
-                    .collection("snapshots").document("latest")
-                    .set(backupData, SetOptions.merge())
-                    .await()
-            }
-
+            // Single source of truth under user-isolated path: users/{uid}
             _syncState.value = SyncState.InProgress("اكتمل حفظ النسخة السحابية...", 0.95f)
 
             prefs.edit()
@@ -476,11 +461,11 @@ class FirestoreSyncManager(
      * records into local Room and NetworkRepository within a single transaction.
      */
     suspend fun syncPull(uid: String, userEmail: String): Result<String> = withContext(Dispatchers.IO) {
-        val safeUid = uid.ifBlank { sanitizeTenantEmail(userEmail) }
+        val safeUid = resolveUid(uid)
         if (safeUid.isBlank()) {
-            val err = "معرف المستخدم غير محدد، يرجى تسجيل الدخول أولاً"
+            val err = "يجب تسجيل الدخول بحساب Google أولاً لاستعادة النسخة السحابية"
             _syncState.value = SyncState.Error(err)
-            return@withContext Result.failure(IllegalArgumentException(err))
+            return@withContext Result.failure(IllegalStateException(err))
         }
 
         val fs = firestore
@@ -494,17 +479,11 @@ class FirestoreSyncManager(
 
         try {
             // 1. Download document from users/{uid}/backup_latest/latest
-            var snapshotDoc = fs.collection("users").document(safeUid)
+            val snapshotDoc = fs.collection("users").document(safeUid)
                 .collection("backup_latest")
                 .document("latest")
                 .get()
                 .await()
-
-            if (!snapshotDoc.exists() && userEmail.isNotBlank()) {
-                snapshotDoc = fs.collection("tenants").document(sanitizeTenantEmail(userEmail))
-                    .collection("snapshots").document("latest")
-                    .get().await()
-            }
 
             if (!snapshotDoc.exists()) {
                 val err = "لا توجد نسخة سحابية سابقة مخزنة لهذا الحساب"
@@ -602,7 +581,8 @@ class FirestoreSyncManager(
     // --- Granular Push & Pull Methods for Network Devices ---
 
     suspend fun pushNetworkDevices(uid: String, userEmail: String): Result<Int> = withContext(Dispatchers.IO) {
-        val safeUid = uid.ifBlank { sanitizeTenantEmail(userEmail) }
+        val safeUid = resolveUid(uid)
+        if (safeUid.isBlank()) return@withContext Result.failure(IllegalStateException("يجب تسجيل الدخول بحساب Google أولاً"))
         val fs = firestore ?: return@withContext Result.failure(IllegalStateException("Firebase غير مهيأ"))
         try {
             val devices = effectiveDeviceDao?.getAllDevices() ?: emptyList()
@@ -640,7 +620,8 @@ class FirestoreSyncManager(
     }
 
     suspend fun pullNetworkDevices(uid: String, userEmail: String): Result<Int> = withContext(Dispatchers.IO) {
-        val safeUid = uid.ifBlank { sanitizeTenantEmail(userEmail) }
+        val safeUid = resolveUid(uid)
+        if (safeUid.isBlank()) return@withContext Result.failure(IllegalStateException("يجب تسجيل الدخول بحساب Google أولاً"))
         val fs = firestore ?: return@withContext Result.failure(IllegalStateException("Firebase غير مهيأ"))
         try {
             val doc = fs.collection("users").document(safeUid)
@@ -680,7 +661,8 @@ class FirestoreSyncManager(
     // --- Granular Push & Pull Methods for Exchange Rates ---
 
     suspend fun pushExchangeRates(uid: String, userEmail: String): Result<Int> = withContext(Dispatchers.IO) {
-        val safeUid = uid.ifBlank { sanitizeTenantEmail(userEmail) }
+        val safeUid = resolveUid(uid)
+        if (safeUid.isBlank()) return@withContext Result.failure(IllegalStateException("يجب تسجيل الدخول بحساب Google أولاً"))
         val fs = firestore ?: return@withContext Result.failure(IllegalStateException("Firebase غير مهيأ"))
         try {
             val rates = db.currencyRateDao().getAllRatesSync()
@@ -712,7 +694,8 @@ class FirestoreSyncManager(
     }
 
     suspend fun pullExchangeRates(uid: String, userEmail: String): Result<Int> = withContext(Dispatchers.IO) {
-        val safeUid = uid.ifBlank { sanitizeTenantEmail(userEmail) }
+        val safeUid = resolveUid(uid)
+        if (safeUid.isBlank()) return@withContext Result.failure(IllegalStateException("يجب تسجيل الدخول بحساب Google أولاً"))
         val fs = firestore ?: return@withContext Result.failure(IllegalStateException("Firebase غير مهيأ"))
         try {
             val doc = fs.collection("users").document(safeUid)
@@ -752,7 +735,8 @@ class FirestoreSyncManager(
     // --- Granular Push & Pull Methods for Network Identity & Initial Configuration ---
 
     suspend fun pushNetworkIdentityAndConfig(uid: String, userEmail: String): Result<String> = withContext(Dispatchers.IO) {
-        val safeUid = uid.ifBlank { sanitizeTenantEmail(userEmail) }
+        val safeUid = resolveUid(uid)
+        if (safeUid.isBlank()) return@withContext Result.failure(IllegalStateException("يجب تسجيل الدخول بحساب Google أولاً"))
         val fs = firestore ?: return@withContext Result.failure(IllegalStateException("Firebase غير مهيأ"))
         try {
             val org = db.organizationDao().getOrganizationSync()
@@ -804,7 +788,8 @@ class FirestoreSyncManager(
     }
 
     suspend fun pullNetworkIdentityAndConfig(uid: String, userEmail: String): Result<String> = withContext(Dispatchers.IO) {
-        val safeUid = uid.ifBlank { sanitizeTenantEmail(userEmail) }
+        val safeUid = resolveUid(uid)
+        if (safeUid.isBlank()) return@withContext Result.failure(IllegalStateException("يجب تسجيل الدخول بحساب Google أولاً"))
         val fs = firestore ?: return@withContext Result.failure(IllegalStateException("Firebase غير مهيأ"))
         try {
             val doc = fs.collection("users").document(safeUid)
@@ -858,45 +843,45 @@ class FirestoreSyncManager(
         }
     }
 
-    // --- Backward-compatible convenience methods for email-only callers ---
+    // --- Convenience methods resolving the current authenticated UID ---
 
     suspend fun syncPush(userEmail: String): Result<String> {
-        val uid = sanitizeTenantEmail(userEmail)
+        val uid = resolveUid()
         return syncPush(uid, userEmail)
     }
 
     suspend fun syncPull(userEmail: String): Result<String> {
-        val uid = sanitizeTenantEmail(userEmail)
+        val uid = resolveUid()
         return syncPull(uid, userEmail)
     }
 
     suspend fun pushNetworkDevices(userEmail: String): Result<Int> {
-        val uid = sanitizeTenantEmail(userEmail)
+        val uid = resolveUid()
         return pushNetworkDevices(uid, userEmail)
     }
 
     suspend fun pullNetworkDevices(userEmail: String): Result<Int> {
-        val uid = sanitizeTenantEmail(userEmail)
+        val uid = resolveUid()
         return pullNetworkDevices(uid, userEmail)
     }
 
     suspend fun pushExchangeRates(userEmail: String): Result<Int> {
-        val uid = sanitizeTenantEmail(userEmail)
+        val uid = resolveUid()
         return pushExchangeRates(uid, userEmail)
     }
 
     suspend fun pullExchangeRates(userEmail: String): Result<Int> {
-        val uid = sanitizeTenantEmail(userEmail)
+        val uid = resolveUid()
         return pullExchangeRates(uid, userEmail)
     }
 
     suspend fun pushNetworkIdentityAndConfig(userEmail: String): Result<String> {
-        val uid = sanitizeTenantEmail(userEmail)
+        val uid = resolveUid()
         return pushNetworkIdentityAndConfig(uid, userEmail)
     }
 
     suspend fun pullNetworkIdentityAndConfig(userEmail: String): Result<String> {
-        val uid = sanitizeTenantEmail(userEmail)
+        val uid = resolveUid()
         return pullNetworkIdentityAndConfig(uid, userEmail)
     }
 

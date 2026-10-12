@@ -992,7 +992,7 @@ private fun CloudSyncAndBackupView(viewModel: AppViewModel) {
                             ) {
                                 Text("مسار العزل السحابي (Firestore):", color = TextSecondaryDark, fontSize = 11.sp)
                                 Text(
-                                    "tenants/${viewModel.syncManager.sanitizeTenantEmail(profile?.email ?: "")}",
+                                    "users/${profile?.uid ?: ""}",
                                     color = TextMutedDark,
                                     fontSize = 10.sp,
                                     fontFamily = FontFamily.Monospace
@@ -1039,19 +1039,6 @@ private fun CloudSyncAndBackupView(viewModel: AppViewModel) {
                                 Icon(Icons.Default.Person, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text("الدخول بنقرة واحدة عبر حساب Google", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            }
-
-                            OutlinedButton(
-                                onClick = {
-                                    viewModel.signInDirectWithEmail("mosthassan.ye@gmail.com", "Mostafa Hassan")
-                                },
-                                shape = RoundedCornerShape(12.dp),
-                                border = BorderStroke(1.dp, MikroTikCyan.copy(alpha = 0.6f)),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("btn_reports_email_fallback")
-                            ) {
-                                Text("دخول فوري بالبريد: mosthassan.ye@gmail.com (بيئة الاختبار / تجاوز Google)", color = MikroTikCyan, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
                             }
                         }
                     }

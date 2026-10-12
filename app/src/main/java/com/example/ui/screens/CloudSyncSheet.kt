@@ -94,9 +94,6 @@ fun CloudSyncSheet(
     val syncMeta by viewModel.syncMetadata.collectAsState()
     val syncHistory by viewModel.syncHistory.collectAsState()
 
-    var showEmailEditDialog by remember { mutableStateOf(false) }
-    var customEmailInput by remember { mutableStateOf("") }
-
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
         sheetState = sheetState,
@@ -228,17 +225,35 @@ fun CloudSyncSheet(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Buttons for Google One-Tap Sign In or Switch
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
+                    // Auth Actions
+                    if (currentUser != null && currentUser!!.isSignedIn) {
+                        OutlinedButton(
+                            onClick = { viewModel.signOutGoogle() },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("btn_sign_out_cloud"),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = SemanticExpenseRed)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ExitToApp,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "تسجيل الخروج من حساب Google",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    } else {
                         Button(
                             onClick = {
                                 viewModel.signInWithGoogle(activity ?: context)
                             },
                             modifier = Modifier
-                                .weight(1f)
+                                .fillMaxWidth()
                                 .testTag("btn_google_one_tap"),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.primary
@@ -257,47 +272,6 @@ fun CloudSyncSheet(
                                 fontWeight = FontWeight.Bold
                             )
                         }
-
-                        OutlinedButton(
-                            onClick = {
-                                customEmailInput = currentUser?.email ?: "mosthassan.ye@gmail.com"
-                                showEmailEditDialog = true
-                            },
-                            modifier = Modifier.testTag("btn_switch_account"),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Text(
-                                text = "تغيير البريد",
-                                fontSize = 12.sp
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // Safe fallback button for test/debug environments without matching SHA-1
-                    OutlinedButton(
-                        onClick = {
-                            customEmailInput = currentUser?.email ?: "mosthassan.ye@gmail.com"
-                            showEmailEditDialog = true
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("btn_dev_fallback_login"),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Security,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                            tint = BrandCyanPrimary
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "دخول بديل بالبريد (بيئة التطوير / بدون SHA-1)",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium
-                        )
                     }
 
                     if (!authError.isNullOrBlank()) {
@@ -582,50 +556,6 @@ fun CloudSyncSheet(
                 }
             }
         }
-    }
-
-    // Dialog for changing / setting custom email
-    if (showEmailEditDialog) {
-        AlertDialog(
-            onDismissRequest = { showEmailEditDialog = false },
-            title = { Text("تعيين بريد المزامنة السحابية", fontWeight = FontWeight.Bold) },
-            text = {
-                Column {
-                    Text(
-                        text = "أدخل بريد حساب Google ليكون المعرف الحصري للمزامنة والبيانات الخاصة بشبكتك:",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = customEmailInput,
-                        onValueChange = { customEmailInput = it },
-                        label = { Text("بريد حساب Google") },
-                        singleLine = true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("input_custom_email")
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (customEmailInput.isNotBlank()) {
-                            viewModel.signInDirectly(customEmailInput)
-                        }
-                        showEmailEditDialog = false
-                    },
-                    modifier = Modifier.testTag("btn_confirm_custom_email")
-                ) {
-                    Text("حفظ وتفعيل")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showEmailEditDialog = false }) {
-                    Text("إلغاء")
-                }
-            }
-        )
     }
 }
 
