@@ -34,34 +34,13 @@ class FirebaseSyncAndAuthUnitTest {
 
     @Test
     fun testTenantEmailSanitization() {
-        val email = "mosthassan.ye@gmail.com"
+        val email = "test.user@example.com"
         val tenantKey = syncManager.sanitizeTenantEmail(email)
-        assertEquals("mosthassan_ye_at_gmail_com", tenantKey)
+        assertEquals("test_user_at_example_com", tenantKey)
 
         val emailUpper = "USER.TEST+NET@COMPANY.ORG"
         val sanitized = syncManager.sanitizeTenantEmail(emailUpper)
         assertEquals("user_test+net_at_company_org", sanitized)
-    }
-
-    @Test
-    fun testGoogleAuthSessionPersistenceAndTenantBinding() {
-        val testEmail = "mosthassan.ye@gmail.com"
-        val testName = "Mostafa Hassan"
-
-        // 1. Sign in directly with email
-        authManager.signInDirectWithEmail(testEmail, testName)
-
-        val profile = authManager.userProfile.value
-        assertNotNull(profile)
-        assertEquals(testEmail, profile?.email)
-        assertEquals(testName, profile?.displayName)
-
-        // 2. Verify new instance restores cached session
-        val newAuthManager = GoogleAuthManager(context)
-        val restoredProfile = newAuthManager.userProfile.value
-        assertNotNull(restoredProfile)
-        assertEquals(testEmail, restoredProfile?.email)
-        assertEquals(testName, restoredProfile?.displayName)
     }
 
     @Test
@@ -83,17 +62,23 @@ class FirebaseSyncAndAuthUnitTest {
         assertTrue("Web client ID should contain client id", clientId.contains(".apps.googleusercontent.com"))
         assertTrue("Web client ID should not contain quotes", !clientId.contains("\"") && !clientId.contains("'"))
         assertEquals(clientId.trim(), clientId)
-        assertEquals("668455931031-burt9863pi64rshdlmgenejnj27ep0d0.apps.googleusercontent.com", clientId)
     }
 
     @Test
     fun testAuthManagerSessionHandling() {
         val auth = com.example.data.auth.AuthManager(context)
-        val session = auth.signInDirectly("test.user@company.com", "Test User")
-        assertEquals("test.user@company.com", session.email)
-        assertEquals("Test User", session.displayName)
-        assertTrue(session.uid.isNotBlank())
-        assertEquals(session, auth.currentUser.value)
+        val session = com.example.data.auth.UserSession(
+            email = "test.user@example.com",
+            displayName = "Test User",
+            photoUrl = null,
+            uid = "firebase_test_uid_12345",
+            isSignedIn = true
+        )
+        auth.saveSessionDirectly(session)
+        assertEquals("test.user@example.com", auth.currentUser.value?.email)
+        assertEquals("Test User", auth.currentUser.value?.displayName)
+        assertEquals("firebase_test_uid_12345", auth.currentUser.value?.uid)
+        assertTrue(auth.currentUser.value?.isSignedIn == true)
     }
 
     @Test

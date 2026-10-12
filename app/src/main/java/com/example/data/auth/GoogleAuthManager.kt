@@ -70,23 +70,8 @@ class GoogleAuthManager(private val context: Context) {
                 uid = fbUser.uid,
                 isAuthenticated = true
             )
-            return
-        }
-
-        val savedEmail = prefs.getString(KEY_USER_EMAIL, null)
-        val savedName = prefs.getString(KEY_USER_NAME, null)
-        val savedPhoto = prefs.getString(KEY_USER_PHOTO, null)
-        val savedUid = prefs.getString(KEY_USER_UID, null)
-
-        if (!savedEmail.isNullOrBlank()) {
-            _userProfile.value = UserProfile(
-                email = savedEmail,
-                displayName = savedName ?: savedEmail.substringBefore("@"),
-                photoUrl = savedPhoto,
-                uid = savedUid ?: savedEmail.replace(".", "_").replace("@", "_at_"),
-                isAuthenticated = true
-            )
         } else {
+            prefs.edit().clear().apply()
             _userProfile.value = null
         }
     }
@@ -203,30 +188,9 @@ class GoogleAuthManager(private val context: Context) {
             }
         }
         _isLoading.value = false
-        val msg = "لا تتوفر بيانات اعتماد Google متوافقة (تأكد من مطابقة SHA-1 في Firebase Console أو استخدم زر الدخول السريع بالبريد)"
+        val msg = "لا تتوفر بيانات اعتماد Google متوافقة (تأكد من مطابقة بصمة SHA-1 وإعداد شاشة موافقة OAuth في Firebase Console)"
         _authError.value = msg
         return Result.failure(Exception(msg))
-    }
-
-    /**
-     * Direct sign-in with verified email (for tests / manual fallback).
-     */
-    fun signInDirectWithEmail(email: String, displayName: String? = null) {
-        val cleanEmail = email.trim().lowercase()
-        val name = displayName?.takeIf { it.isNotBlank() } ?: cleanEmail.substringBefore("@")
-        val uid = cleanEmail.replace(".", "_").replace("@", "_at_")
-
-        val profile = UserProfile(
-            email = cleanEmail,
-            displayName = name,
-            photoUrl = null,
-            uid = uid,
-            isAuthenticated = true
-        )
-
-        persistSession(profile)
-        _userProfile.value = profile
-        _authError.value = null
     }
 
     /**

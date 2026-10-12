@@ -58,15 +58,10 @@ class AuthManager(private val context: Context) {
     private fun ensureFirebaseInitialized() {
         try {
             if (FirebaseApp.getApps(context).isEmpty()) {
-                val options = FirebaseOptions.Builder()
-                    .setProjectId("sam-mikrotic")
-                    .setApplicationId("com.samtecai.sammikrotic")
-                    .setApiKey("AIzaSyAPnh9iJyZQdrhF2sYtzq2CKFdibKvK9J4")
-                    .build()
-                FirebaseApp.initializeApp(context, options)
+                FirebaseApp.initializeApp(context)
             }
         } catch (e: Exception) {
-            Log.w("AuthManager", "FirebaseApp initialization fallback: ${e.message}")
+            Log.w("AuthManager", "FirebaseApp initialization: ${e.message}")
         }
     }
 
@@ -82,22 +77,9 @@ class AuthManager(private val context: Context) {
             )
             _currentUser.value = session
             saveSession(session)
-            return
-        }
-
-        val savedEmail = prefs.getString("user_email", null)
-        val savedUid = prefs.getString("user_uid", null)
-        if (!savedEmail.isNullOrBlank() && !savedUid.isNullOrBlank()) {
-            val name = prefs.getString("user_name", "") ?: ""
-            val photo = prefs.getString("user_photo", null)
-            _currentUser.value = UserSession(
-                email = savedEmail,
-                displayName = if (name.isNotBlank()) name else savedEmail.substringBefore("@"),
-                photoUrl = photo,
-                uid = savedUid,
-                isSignedIn = true
-            )
         } else {
+            // No unauthenticated phantom sessions allowed
+            prefs.edit().clear().apply()
             _currentUser.value = null
         }
     }
@@ -212,7 +194,7 @@ class AuthManager(private val context: Context) {
             }
         }
         _isLoading.value = false
-        val msg = "لا تتوفر حسابات Google متوافقة (تأكد من مطابقة SHA-1 في Firebase Console أو استخدم زر الدخول بالبريد أدناه)"
+        val msg = "لا تتوفر حسابات Google متوافقة (تأكد من مطابقة بصمة SHA-1 وإعداد شاشة موافقة OAuth في Firebase Console)"
         _authError.value = msg
         return Result.failure(Exception(msg))
     }
@@ -221,29 +203,6 @@ class AuthManager(private val context: Context) {
         saveSession(session)
         _currentUser.value = session
         _authError.value = null
-    }
-
-    /**
-     * Direct Sign-in method for explicit email/manual entry.
-     */
-    fun signInDirectly(
-        email: String,
-        displayName: String = "",
-        photoUrl: String? = null
-    ): UserSession {
-        val cleanEmail = email.trim().lowercase()
-        val name = if (displayName.isNotBlank()) displayName else cleanEmail.substringBefore("@")
-        val session = UserSession(
-            email = cleanEmail,
-            displayName = name,
-            photoUrl = photoUrl,
-            uid = cleanEmail.replace(".", "_").replace("@", "_at_"),
-            isSignedIn = true
-        )
-        saveSession(session)
-        _currentUser.value = session
-        _authError.value = null
-        return session
     }
 
     /**

@@ -383,6 +383,9 @@ class BackupRestoreUseCase(
             sdb.execSQL("DELETE FROM card_packages")
             sdb.execSQL("DELETE FROM parties WHERE id != 'WALK_IN_CASH'")
             sdb.execSQL("DELETE FROM currency_rates")
+            sdb.execSQL("DELETE FROM treasury_accounts")
+            sdb.execSQL("DELETE FROM number_sequences")
+            sdb.execSQL("DELETE FROM fiscal_periods")
 
             // 0. Restore Organization if present
             if (root.has("organization")) {
