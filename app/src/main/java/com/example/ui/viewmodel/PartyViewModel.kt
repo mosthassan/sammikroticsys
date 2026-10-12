@@ -146,7 +146,7 @@ class PartyViewModel(
                     }
                 }
             } catch (e: SecurityException) {
-                Log.w(TAG, "READ_CONTACTS permission denied or missing: ${e.message}")
+                Log.w(TAG, "Contact provider security limitation: ${e.message}")
                 return null
             } catch (e: Exception) {
                 Log.e(TAG, "Error resolving contact: ${e.message}", e)

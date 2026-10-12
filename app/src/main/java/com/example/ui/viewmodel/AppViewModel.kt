@@ -14,7 +14,6 @@ import com.example.data.auth.AuthManager
 import com.example.data.auth.GoogleAuthManager
 import com.example.data.auth.UserProfile
 import com.example.data.auth.UserSession
-import com.example.data.sync.FirebaseSyncManager
 import com.example.data.sync.FirestoreSyncManager
 import com.example.data.sync.SyncLogItem
 import com.example.data.sync.SyncMetadata
@@ -113,16 +112,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val authManager = AuthManager(application)
     val syncManager = FirestoreSyncManager(application, db, backupRestoreUseCase, networkRepository = networkRepository, deviceDao = networkRepository)
     val googleAuthManager = GoogleAuthManager(application)
-    val firebaseSyncManager = FirebaseSyncManager(application, db)
+    val chunkedBackupManager = com.example.data.sync.ChunkedBackupManager(application, db, backupRestoreUseCase)
 
     val currentUser: StateFlow<UserSession?> = authManager.currentUser
     val authError: StateFlow<String?> = authManager.authError
     val isAuthLoading: StateFlow<Boolean> = authManager.isLoading
 
     val currentUserProfile: StateFlow<UserProfile?> = googleAuthManager.userProfile
-    val syncStatus: StateFlow<SyncStatus> = firebaseSyncManager.syncStatus
-    val lastSyncTimestamp: StateFlow<String?> = firebaseSyncManager.lastSyncTimestamp
-    val autoSyncEnabled: StateFlow<Boolean> = firebaseSyncManager.autoSyncEnabled
+    val syncStatus: StateFlow<SyncStatus> = MutableStateFlow(SyncStatus.Idle)
+    val lastSyncTimestamp: StateFlow<String?> = MutableStateFlow(null)
+    val autoSyncEnabled: StateFlow<Boolean> = MutableStateFlow(false)
 
     val syncState: StateFlow<SyncState> = syncManager.syncState
     val syncMetadata: StateFlow<SyncMetadata?> = syncManager.syncMetadata
@@ -1507,7 +1506,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setAutoSync(enabled: Boolean) {
-        firebaseSyncManager.setAutoSync(enabled)
+        // Auto sync controlled via chunked backup settings
     }
 
     fun signInWithGoogleOneTap(context: android.content.Context) {
@@ -1530,6 +1529,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 val err = res.exceptionOrNull()?.localizedMessage ?: "فشل تسجيل الدخول عبر Google"
                 _userMessage.emit(err)
+            }
+        }
+    }
+
+    fun purgeCloudData() {
+        viewModelScope.launch {
+            val user = currentUser.value
+            if (user == null) {
+                _userMessage.emit("يجب تسجيل الدخول لحذف البيانات")
+                return@launch
+            }
+            val res = chunkedBackupManager.purgeAllCloudData(user.uid)
+            if (res.isSuccess) {
+                _userMessage.emit("تم حذف كافة البيانات والنسخ السحابية نهائياً من الخادم")
+            } else {
+                _userMessage.emit("فشل حذف البيانات السحابية: ${res.exceptionOrNull()?.message}")
             }
         }
     }

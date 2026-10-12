@@ -172,17 +172,7 @@ fun AddEditPartyDialog(
         }
     }
 
-    // Permission Launcher for READ_CONTACTS
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            contactPickerLauncher.launch(null)
-        } else {
-            bannerMessage = "تم رفض إذن الوصول إلى جهات الاتصال"
-            bannerIsSuccess = false
-        }
-    }
+
 
     // Auto-dismiss banner message after 3.5 seconds
     LaunchedEffect(bannerMessage) {
@@ -357,16 +347,7 @@ fun AddEditPartyDialog(
                             // Native Contact Picker Action Button
                             FilledIconButton(
                                 onClick = {
-                                    val hasPermission = ContextCompat.checkSelfPermission(
-                                        context,
-                                        Manifest.permission.READ_CONTACTS
-                                    ) == PackageManager.PERMISSION_GRANTED
-
-                                    if (hasPermission) {
-                                        contactPickerLauncher.launch(null)
-                                    } else {
-                                        permissionLauncher.launch(Manifest.permission.READ_CONTACTS)
-                                    }
+                                    contactPickerLauncher.launch(null)
                                 },
                                 shape = RoundedCornerShape(12.dp),
                                 colors = IconButtonDefaults.filledIconButtonColors(

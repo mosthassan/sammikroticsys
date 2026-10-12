@@ -16,6 +16,7 @@ import com.example.data.network.toBackupDto
 import com.example.domain.usecase.BackupRestoreUseCase
 import com.example.util.NetworkProfileBackupDto
 import com.google.firebase.FirebaseApp
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.Dispatchers
@@ -114,9 +115,12 @@ class FirestoreSyncManager(
     }
 
     private fun resolveUid(explicitUid: String? = null): String {
-        return FirebaseAuth.getInstance().currentUser?.uid?.takeIf { it.isNotBlank() }
-            ?: explicitUid?.trim()?.takeIf { it.isNotBlank() }
-            ?: ""
+        return try {
+            FirebaseAuth.getInstance().currentUser?.uid?.takeIf { it.isNotBlank() }
+        } catch (e: Exception) {
+            null
+        } ?: explicitUid?.trim()?.takeIf { !it.isNullOrBlank() }
+        ?: ""
     }
 
     /**
