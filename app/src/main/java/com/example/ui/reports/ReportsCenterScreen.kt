@@ -116,6 +116,8 @@ import com.example.ui.theme.TextMutedDark
 import com.example.ui.theme.TextPrimaryDark
 import com.example.ui.theme.TextSecondaryDark
 import com.example.ui.viewmodel.AppViewModel
+import com.example.data.local.entity.PartyEntity
+import com.example.data.local.entity.TreasuryAccountEntity
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
@@ -136,10 +138,15 @@ fun ReportsCenterScreen(
     val reportsEngine = remember { ReportsEngine(viewModel.db) }
     val drillDownService = remember { DrillDownService(viewModel.db) }
 
+    val allPartners by viewModel.allPartners.collectAsState()
+    val allTreasuries by viewModel.allTreasuries.collectAsState()
+
     var selectedCategory by remember { mutableStateOf<ReportCategory?>(null) }
     var selectedReportType by remember { mutableStateOf<ReportType?>(null) }
     var searchQuery by remember { mutableStateOf("") }
     var periodFilter by remember { mutableStateOf(ReportPeriodFilter.THIS_MONTH) }
+    var selectedPartnerId by remember { mutableStateOf<String?>(null) }
+    var selectedTreasuryId by remember { mutableStateOf<String?>(null) }
 
     // Date calculations using AppClock & FiscalCalendar
     val todayEpoch = remember { AppClock.todayEpochDay() }
@@ -191,10 +198,18 @@ fun ReportsCenterScreen(
             isLoadingReport = true
             reportErrorMessage = null
             try {
+                val params = mutableMapOf<String, String>()
+                if (type == ReportType.PARTNER_STATEMENT && selectedPartnerId != null) {
+                    params["partyId"] = selectedPartnerId!!
+                }
+                if (type == ReportType.DAILY_CASH_REGISTER && selectedTreasuryId != null) {
+                    params["treasuryId"] = selectedTreasuryId!!
+                }
                 val request = ReportRequest(
                     type = type,
                     fromEpochDay = fromEpochDay,
-                    toEpochDay = toEpochDay
+                    toEpochDay = toEpochDay,
+                    params = params
                 )
                 val result = reportsEngine.generateReport(request)
                 currentReportResult = result
@@ -271,6 +286,18 @@ fun ReportsCenterScreen(
                             result = currentReportResult,
                             isLoading = isLoadingReport,
                             errorMessage = reportErrorMessage,
+                            partners = allPartners,
+                            treasuries = allTreasuries,
+                            selectedPartnerId = selectedPartnerId,
+                            onPartnerSelected = { pId ->
+                                selectedPartnerId = pId
+                                loadReport(selectedReportType!!)
+                            },
+                            selectedTreasuryId = selectedTreasuryId,
+                            onTreasurySelected = { tId ->
+                                selectedTreasuryId = tId
+                                loadReport(selectedReportType!!)
+                            },
                             onRefresh = { loadReport(selectedReportType!!) },
                             onCellClick = { target, amount, curr ->
                                 activeDrillTarget = target
@@ -337,6 +364,18 @@ fun ReportsCenterScreen(
                         result = currentReportResult,
                         isLoading = isLoadingReport,
                         errorMessage = reportErrorMessage,
+                        partners = allPartners,
+                        treasuries = allTreasuries,
+                        selectedPartnerId = selectedPartnerId,
+                        onPartnerSelected = { pId ->
+                            selectedPartnerId = pId
+                            loadReport(selectedReportType!!)
+                        },
+                        selectedTreasuryId = selectedTreasuryId,
+                        onTreasurySelected = { tId ->
+                            selectedTreasuryId = tId
+                            loadReport(selectedReportType!!)
+                        },
                         onRefresh = { loadReport(selectedReportType!!) },
                         onCellClick = { target, amount, curr ->
                             activeDrillTarget = target
@@ -605,6 +644,12 @@ private fun ActiveReportView(
     result: ReportResult?,
     isLoading: Boolean,
     errorMessage: String?,
+    partners: List<PartyEntity> = emptyList(),
+    treasuries: List<TreasuryAccountEntity> = emptyList(),
+    selectedPartnerId: String? = null,
+    onPartnerSelected: (String) -> Unit = {},
+    selectedTreasuryId: String? = null,
+    onTreasurySelected: (String?) -> Unit = {},
     onRefresh: () -> Unit,
     onCellClick: (DrillTarget, Long, CurrencyCode) -> Unit,
     onSharePdf: (ReportTable, ReportFooter?) -> Unit,
@@ -645,6 +690,51 @@ private fun ActiveReportView(
     val footer = result.footer
 
     Column(modifier = Modifier.fillMaxSize()) {
+        // Partner sub-filter chips for PARTNER_STATEMENT
+        if (reportType == ReportType.PARTNER_STATEMENT) {
+            val activePartners = partners.filter { it.isPartner }
+            if (activePartners.isNotEmpty()) {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                ) {
+                    items(activePartners) { p ->
+                        val isSel = (selectedPartnerId == p.id) || (selectedPartnerId == null && p == activePartners.first())
+                        FilterChip(
+                            selected = isSel,
+                            onClick = { onPartnerSelected(p.id) },
+                            label = { Text(p.name, fontSize = 11.sp, color = if (isSel) MikroTikCyan else TextPrimaryDark) }
+                        )
+                    }
+                }
+            }
+        }
+
+        // Treasury sub-filter chips for DAILY_CASH_REGISTER
+        if (reportType == ReportType.DAILY_CASH_REGISTER) {
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+            ) {
+                item {
+                    val isAll = selectedTreasuryId == null
+                    FilterChip(
+                        selected = isAll,
+                        onClick = { onTreasurySelected(null) },
+                        label = { Text("كافة الخزائن", fontSize = 11.sp, color = if (isAll) MikroTikCyan else TextPrimaryDark) }
+                    )
+                }
+                items(treasuries) { t ->
+                    val isSel = selectedTreasuryId == t.id
+                    FilterChip(
+                        selected = isSel,
+                        onClick = { onTreasurySelected(t.id) },
+                        label = { Text("${t.name} (${t.currency})", fontSize = 11.sp, color = if (isSel) MikroTikCyan else TextPrimaryDark) }
+                    )
+                }
+            }
+        }
+
         // Actions & Status Header
         Surface(
             color = CyberDarkSurface,
@@ -698,6 +788,36 @@ private fun ActiveReportView(
                     IconButton(onClick = onRefresh) {
                         Icon(Icons.Default.Refresh, contentDescription = "تحديث", tint = TextSecondaryDark)
                     }
+                }
+            }
+        }
+
+        // Summary / Reconciliation alert banner
+        if (!footer.reconciliationDetails.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Surface(
+                color = if (footer.reconciled) MikroTikCyan.copy(alpha = 0.1f) else SemanticExpenseRed.copy(alpha = 0.12f),
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(1.dp, if (footer.reconciled) MikroTikCyan.copy(alpha = 0.35f) else SemanticExpenseRed.copy(alpha = 0.4f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (footer.reconciled) Icons.Default.CheckCircle else Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = if (footer.reconciled) MikroTikCyan else SemanticExpenseRed,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = footer.reconciliationDetails,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = TextPrimaryDark
+                    )
                 }
             }
         }
@@ -783,6 +903,8 @@ private fun ActiveReportView(
                                             isDrillable -> MikroTikCyan
                                             row.type == RowType.TOTAL -> MikroTikCyan
                                             cell is ReportCell.MoneyCell && cell.amountMinor < 0L -> SemanticExpenseRed
+                                            cell is ReportCell.TextCell && cell.text.startsWith("+") -> SemanticIncomeGreen
+                                            cell is ReportCell.TextCell && cell.text.startsWith("-") -> SemanticExpenseRed
                                             else -> TextPrimaryDark
                                         },
                                         textDecoration = if (isDrillable) TextDecoration.Underline else TextDecoration.None,

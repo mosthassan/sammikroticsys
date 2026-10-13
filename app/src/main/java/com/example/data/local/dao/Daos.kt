@@ -244,6 +244,101 @@ internal interface JournalDao {
     ): List<DrillDownLineRow>
 
     @Query("""
+        SELECT 
+            jl.id AS lineId,
+            je.id AS entryId,
+            je.entryNumber AS entryNumber,
+            je.entryDateEpochDay AS dateEpochDay,
+            je.type AS entryType,
+            je.docId AS docId,
+            d.docNumber AS docNumber,
+            d.type AS docType,
+            jl.accountCode AS accountCode,
+            jl.partyId AS partyId,
+            COALESCE(p.name, '') AS partyName,
+            jl.origMinor AS origAmountMinor,
+            jl.currency AS currency,
+            jl.baseDebitMinor AS baseDebitMinor,
+            jl.baseCreditMinor AS baseCreditMinor,
+            COALESCE(jl.memo, je.memo, '') AS memo
+        FROM journal_lines jl
+        INNER JOIN journal_entries je ON jl.entryId = je.id
+        LEFT JOIN documents d ON je.docId = d.id
+        LEFT JOIN parties p ON jl.partyId = p.id
+        WHERE (:treasuryId IS NULL OR jl.treasuryId = :treasuryId)
+          AND (jl.accountCode LIKE '11%')
+          AND je.entryDateEpochDay >= :fromEpochDay
+          AND je.entryDateEpochDay <= :toEpochDay
+          AND je.type != 'CLOSING'
+        ORDER BY je.entryDateEpochDay ASC, je.entryNumber ASC, jl.lineNo ASC
+    """)
+    suspend fun getCashRegisterLines(
+        treasuryId: String?,
+        fromEpochDay: Long,
+        toEpochDay: Long
+    ): List<DrillDownLineRow>
+
+    @Query("""
+        SELECT COALESCE(SUM(jl.baseDebitMinor - jl.baseCreditMinor), 0)
+        FROM journal_lines jl
+        INNER JOIN journal_entries je ON jl.entryId = je.id
+        WHERE (:treasuryId IS NULL OR jl.treasuryId = :treasuryId)
+          AND (jl.accountCode LIKE '11%')
+          AND je.entryDateEpochDay < :beforeEpochDay
+          AND je.type != 'CLOSING'
+    """)
+    suspend fun getCashOpeningBalance(
+        treasuryId: String?,
+        beforeEpochDay: Long
+    ): Long
+
+    @Query("""
+        SELECT COALESCE(SUM(jl.baseCreditMinor - jl.baseDebitMinor), 0)
+        FROM journal_lines jl
+        INNER JOIN journal_entries je ON jl.entryId = je.id
+        WHERE jl.partyId = :partyId
+          AND jl.accountCode = :accountCode
+          AND je.entryDateEpochDay < :beforeEpochDay
+          AND je.type != 'CLOSING'
+    """)
+    suspend fun getPartnerOpeningBalance(
+        partyId: String,
+        accountCode: String,
+        beforeEpochDay: Long
+    ): Long
+
+    @Query("""
+        SELECT COALESCE(SUM(jl.baseCreditMinor - jl.baseDebitMinor), 0)
+        FROM journal_lines jl
+        INNER JOIN journal_entries je ON jl.entryId = je.id
+        WHERE jl.partyId = :partyId
+          AND jl.accountCode = :accountCode
+          AND je.entryDateEpochDay <= :asOfEpochDay
+          AND je.type != 'CLOSING'
+    """)
+    suspend fun getPartnerBalanceAsOf(
+        partyId: String,
+        accountCode: String,
+        asOfEpochDay: Long
+    ): Long
+
+    @Query("""
+        SELECT jl.entryId
+        FROM journal_lines jl
+        INNER JOIN journal_entries je ON jl.entryId = je.id
+        WHERE jl.accountCode LIKE '11%'
+          AND je.entryDateEpochDay >= :fromEpochDay
+          AND je.entryDateEpochDay <= :toEpochDay
+          AND je.type != 'CLOSING'
+        GROUP BY jl.entryId
+    """)
+    suspend fun getCashEntryIdsForPeriod(
+        fromEpochDay: Long,
+        toEpochDay: Long
+    ): List<String>
+
+
+    @Query("""
         SELECT jl.accountCode AS accountCode, a.name AS accountName,
                COALESCE(SUM(jl.baseDebitMinor), 0) AS totalDebitMinor,
                COALESCE(SUM(jl.baseCreditMinor), 0) AS totalCreditMinor,
