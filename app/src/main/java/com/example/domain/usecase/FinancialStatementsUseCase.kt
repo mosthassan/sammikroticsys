@@ -95,76 +95,31 @@ class FinancialStatementsUseCase(private val db: AppDatabase) {
         startDateEpochDay: Long? = null,
         endDateEpochDay: Long? = null
     ): IncomeStatementReport {
-        val rows = db.journalDao().getIncomeStatementLines(startDateEpochDay, endDateEpochDay)
-
-        var cardRevenue = 0L
-        var serviceRevenue = 0L
-        var salesReturns = 0L
-        var directIspCost = 0L
-        var operatingExp = 0L
-        var maintenanceExp = 0L
-        var salariesExp = 0L
-        var miscExp = 0L
-        var depreciationExp = 0L
-        var realizedFxGain = 0L
-        var realizedFxLoss = 0L
-        var unrealizedFxGain = 0L
-        var unrealizedFxLoss = 0L
-
-        rows.forEach { row ->
-            when (row.accountCode) {
-                AccountConstants.CARD_SALES_REVENUE -> cardRevenue += row.netAmountMinor
-                AccountConstants.DIRECT_SERVICE_REVENUE -> serviceRevenue += row.netAmountMinor
-                AccountConstants.SALES_RETURNS -> salesReturns += row.netAmountMinor
-                AccountConstants.DIRECT_ISP_SERVICE_COST -> directIspCost += row.netAmountMinor
-                AccountConstants.OPERATING_EXPENSES -> operatingExp += row.netAmountMinor
-                AccountConstants.MAINTENANCE_SPARES -> maintenanceExp += row.netAmountMinor
-                AccountConstants.SALARIES_STAFF -> salariesExp += row.netAmountMinor
-                AccountConstants.MISC_EXPENSES -> miscExp += row.netAmountMinor
-                AccountConstants.DEPRECIATION_EXPENSE -> depreciationExp += row.netAmountMinor
-                AccountConstants.REALIZED_FX_GAIN -> realizedFxGain += row.netAmountMinor
-                AccountConstants.REALIZED_FX_LOSS -> realizedFxLoss += row.netAmountMinor
-                AccountConstants.UNREALIZED_FX_GAIN -> unrealizedFxGain += row.netAmountMinor
-                AccountConstants.UNREALIZED_FX_LOSS -> unrealizedFxLoss += row.netAmountMinor
-                else -> {
-                    // Include any custom 4xxx or 5xxx accounts
-                    if (row.accountCode.startsWith("4")) {
-                        serviceRevenue += row.netAmountMinor
-                    } else if (row.accountCode.startsWith("5")) {
-                        miscExp += row.netAmountMinor
-                    }
-                }
-            }
-        }
-
-        val netRevenue = (cardRevenue + serviceRevenue) - salesReturns
-        val grossProfit = netRevenue - directIspCost
-        val totalOperatingExp = operatingExp + maintenanceExp + salariesExp + miscExp
-        val totalFxGain = realizedFxGain + unrealizedFxGain
-        val totalFxLoss = realizedFxLoss + unrealizedFxLoss
-        val netProfit = grossProfit - totalOperatingExp - depreciationExp + totalFxGain - totalFxLoss
+        val fromEpoch = startDateEpochDay ?: 0L
+        val toEpoch = endDateEpochDay ?: 3000000L
+        val breakdown = com.example.domain.report.ProfitBreakdownService(db).calculateBreakdown(fromEpoch, toEpoch)
 
         return IncomeStatementReport(
             startDateEpochDay = startDateEpochDay,
             endDateEpochDay = endDateEpochDay,
-            cardRevenueMinor = cardRevenue,
-            serviceRevenueMinor = serviceRevenue,
-            salesReturnsMinor = salesReturns,
-            netRevenueMinor = netRevenue,
-            directIspCostMinor = directIspCost,
-            grossProfitMinor = grossProfit,
-            operatingExpensesMinor = operatingExp,
-            maintenanceExpensesMinor = maintenanceExp,
-            salariesExpensesMinor = salariesExp,
-            miscExpensesMinor = miscExp,
-            totalOperatingExpensesMinor = totalOperatingExp,
-            depreciationExpenseMinor = depreciationExp,
-            realizedFxGainMinor = realizedFxGain,
-            realizedFxLossMinor = realizedFxLoss,
-            unrealizedFxGainMinor = unrealizedFxGain,
-            unrealizedFxLossMinor = unrealizedFxLoss,
-            netProfitMinor = netProfit,
-            allLineDetails = rows
+            cardRevenueMinor = breakdown.cardRevenueMinor,
+            serviceRevenueMinor = breakdown.serviceRevenueMinor + breakdown.otherRevenueMinor,
+            salesReturnsMinor = breakdown.salesReturnsMinor,
+            netRevenueMinor = breakdown.netRevenueMinor,
+            directIspCostMinor = breakdown.totalCostOfServiceMinor,
+            grossProfitMinor = breakdown.grossProfitMinor,
+            operatingExpensesMinor = breakdown.operatingExpensesMinor,
+            maintenanceExpensesMinor = breakdown.maintenanceExpensesMinor,
+            salariesExpensesMinor = breakdown.salariesExpensesMinor,
+            miscExpensesMinor = breakdown.miscExpensesMinor + breakdown.otherOperatingExpensesMinor,
+            totalOperatingExpensesMinor = breakdown.totalOperatingExpensesMinor,
+            depreciationExpenseMinor = breakdown.depreciationExpenseMinor,
+            realizedFxGainMinor = breakdown.realizedFxGainMinor,
+            realizedFxLossMinor = breakdown.realizedFxLossMinor,
+            unrealizedFxGainMinor = breakdown.unrealizedFxGainMinor,
+            unrealizedFxLossMinor = breakdown.unrealizedFxLossMinor,
+            netProfitMinor = breakdown.netProfitMinor,
+            allLineDetails = breakdown.rawRows
         )
     }
 

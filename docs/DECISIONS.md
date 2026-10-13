@@ -78,3 +78,24 @@
   6. Restoring creates a local safety snapshot before writing, requires explicit user confirmation, and rejects backups created with newer schema versions (`dbSchemaVersion > current`).
   7. Device passwords/secrets are explicitly stripped and never exported to cloud backups.
   8. Cloud data deletion is supported via user-initiated purge of all `users/{uid}/**` documents.
+
+---
+
+## 10. ADR-009: Real-time Monthly Profit Extraction without Monthly Closing or Distribution
+- **Status:** Accepted
+- **Context:** The network owner requires knowing exact monthly net profits, partner movements, and complete financial health on a monthly basis without artificial monthly closing entries (no account 3302, no monthly closing wizard, no archived snapshots). Dividend distribution remains an on-demand transaction (annual or agreed upon) rather than an automated monthly cycle.
+- **Decision:**
+  1. Monthly profits are extracted dynamically and directly from the general ledger (`journal_lines`) using the date range of each calendar/fiscal month. No closing or summary journal entries are posted for intermediate months.
+  2. Account 3302 is not created; period locking (`FiscalPeriodEntity.isClosed`) remains strictly for preventing edits/backdating.
+  3. Partner shares of monthly profit are computed strictly as an informative, non-posting informational figure ("تقديري للعلم، لا قيد محاسبي").
+  4. Real-time reports (Income statement, monthly profit breakdown, partner statement, cash flows, audit trail) are read-only and never write to the ledger or documents.
+
+---
+
+## 11. ADR-010: Lightweight Export Formats (PDF Canvas & UTF-8 BOM CSV over Heavy Apache POI)
+- **Status:** Accepted
+- **Context:** Mobile apps for network operators in fieldwork need fast, dependency-light exports of financial tables and reports that open cleanly in Excel, WhatsApp, and PDF viewers without inflating APK size or causing multi-dex/memory bloat (e.g. Apache POI is 30MB+ and slow on Android).
+- **Decision:**
+  1. **CSV Export:** Standard UTF-8 with Byte Order Mark (`\uFEFF`) and CRLF endings. Arabic headers, unescaped/escaped standard CSV strings, and unformatted decimal numbers (`1000.50` instead of `1,000.50`) ensure Microsoft Excel on Windows/Mac and mobile opens Arabic and numeric columns flawlessly.
+  2. **PDF Export:** Built using Android's native `android.graphics.pdf.PdfDocument` with RTL Bidi support and automatic landscape/portrait switching for wide tabular reports.
+  3. Heavy third-party Excel libraries (such as Apache POI) are strictly avoided.
