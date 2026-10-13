@@ -129,10 +129,10 @@ fun ReportsScreen(
 
     LaunchedEffect(selectedTab) {
         when (selectedTab) {
-            0 -> viewModel.loadIncomeStatement(todayEpoch - 30, todayEpoch)
-            1 -> viewModel.loadBalanceSheet(todayEpoch)
-            2 -> viewModel.loadAgingReport(todayEpoch)
-            3 -> {
+            1 -> viewModel.loadIncomeStatement(todayEpoch - 30, todayEpoch)
+            2 -> viewModel.loadBalanceSheet(todayEpoch)
+            3 -> viewModel.loadAgingReport(todayEpoch)
+            4 -> {
                 viewModel.loadIncomeStatement(todayEpoch - 30, todayEpoch)
                 viewModel.loadBalanceSheet(todayEpoch)
             }
@@ -142,6 +142,11 @@ fun ReportsScreen(
     Column(modifier = modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
         ModernFintechScrollableTabs(
             items = listOf(
+                FintechTabItem(
+                    title = "مركز التقارير المتكامل",
+                    icon = Icons.Default.Analytics,
+                    accentColor = MikroTikCyan
+                ),
                 FintechTabItem(
                     title = "قائمة الدخل (P&L)",
                     icon = Icons.Default.Analytics,
@@ -180,17 +185,18 @@ fun ReportsScreen(
                 .padding(16.dp)
         ) {
             when (selectedTab) {
-                0 -> IncomeStatementView(incomeReport, onPeriodSelected = { start, end ->
+                0 -> com.example.ui.reports.ReportsCenterScreen(viewModel = viewModel)
+                1 -> IncomeStatementView(incomeReport, onPeriodSelected = { start, end ->
                     viewModel.loadIncomeStatement(start, end)
                 })
-                1 -> BalanceSheetView(balanceReport, onRefresh = {
+                2 -> BalanceSheetView(balanceReport, onRefresh = {
                     viewModel.loadBalanceSheet(todayEpoch)
                 })
-                2 -> AgingReportView(agingReport, onRefresh = {
+                3 -> AgingReportView(agingReport, onRefresh = {
                     viewModel.loadAgingReport(todayEpoch)
                 })
-                3 -> PartnerDividendsView(incomeReport, balanceReport, viewModel)
-                4 -> CloudSyncAndBackupView(viewModel)
+                4 -> PartnerDividendsView(incomeReport, balanceReport, viewModel)
+                5 -> CloudSyncAndBackupView(viewModel)
             }
         }
     }

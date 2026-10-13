@@ -110,6 +110,25 @@ data class PartyForeignBalanceItem(
     val currency: String
 )
 
+data class DrillDownLineRow(
+    val lineId: String,
+    val entryId: String,
+    val entryNumber: Long,
+    val dateEpochDay: Long,
+    val entryType: String,
+    val docId: String?,
+    val docNumber: Long?,
+    val docType: String?,
+    val accountCode: String,
+    val partyId: String?,
+    val partyName: String,
+    val origAmountMinor: Long,
+    val currency: String,
+    val baseDebitMinor: Long,
+    val baseCreditMinor: Long,
+    val memo: String
+)
+
 /**
  * Journal entries and lines write access is restricted exclusively to LedgerWriter.
  */
@@ -187,6 +206,42 @@ internal interface JournalDao {
         startDateEpochDay: Long?,
         endDateEpochDay: Long?
     ): List<StatementLineRow>
+
+    @Query("""
+        SELECT 
+            jl.id AS lineId,
+            je.id AS entryId,
+            je.entryNumber AS entryNumber,
+            je.entryDateEpochDay AS dateEpochDay,
+            je.type AS entryType,
+            je.docId AS docId,
+            d.docNumber AS docNumber,
+            d.type AS docType,
+            jl.accountCode AS accountCode,
+            jl.partyId AS partyId,
+            COALESCE(p.name, '') AS partyName,
+            jl.origMinor AS origAmountMinor,
+            jl.currency AS currency,
+            jl.baseDebitMinor AS baseDebitMinor,
+            jl.baseCreditMinor AS baseCreditMinor,
+            COALESCE(jl.memo, je.memo, '') AS memo
+        FROM journal_lines jl
+        INNER JOIN journal_entries je ON jl.entryId = je.id
+        LEFT JOIN documents d ON je.docId = d.id
+        LEFT JOIN parties p ON jl.partyId = p.id
+        WHERE jl.accountCode = :accountCode
+          AND je.entryDateEpochDay >= :fromEpochDay
+          AND je.entryDateEpochDay <= :toEpochDay
+          AND (:partyId IS NULL OR jl.partyId = :partyId)
+          AND je.type != 'CLOSING'
+        ORDER BY je.entryDateEpochDay ASC, je.entryNumber ASC, jl.lineNo ASC
+    """)
+    suspend fun getDrillDownLinesForAccount(
+        accountCode: String,
+        fromEpochDay: Long,
+        toEpochDay: Long,
+        partyId: String? = null
+    ): List<DrillDownLineRow>
 
     @Query("""
         SELECT jl.accountCode AS accountCode, a.name AS accountName,
@@ -721,6 +776,12 @@ interface CurrencyRateDao {
 interface AuditLogDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertLog(log: AuditLogEntity)
+
+    @Query("SELECT * FROM audit_log ORDER BY timestamp DESC")
+    suspend fun getAllLogsSync(): List<AuditLogEntity>
+
+    @Query("SELECT COUNT(*) FROM audit_log")
+    suspend fun countLogs(): Int
 }
 
 @Dao
