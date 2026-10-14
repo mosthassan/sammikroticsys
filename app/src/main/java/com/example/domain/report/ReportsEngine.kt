@@ -14,6 +14,8 @@ class ReportsEngine(
 ) {
     private val financialStatementsUseCase = FinancialStatementsUseCase(db)
     private val profitBreakdownService = ProfitBreakdownService(db)
+    private val activityReportsService = ActivityReportsService(db)
+    private val auditReportsService = AuditReportsService(db)
 
     suspend fun generateReport(request: ReportRequest): ReportResult {
         return when (request.type) {
@@ -26,7 +28,13 @@ class ReportsEngine(
             ReportType.PARTNERS_EQUITY_SUMMARY -> generatePartnersEquitySummaryReport(request)
             ReportType.CASH_FLOW -> generateCashFlowReport(request)
             ReportType.DAILY_CASH_REGISTER -> generateDailyCashRegisterReport(request)
-            else -> generateGenericPlaceholderReport(request)
+            ReportType.SALES_ANALYTICS -> activityReportsService.generateSalesAnalyticsReport(request)
+            ReportType.COLLECTIONS_DSO -> activityReportsService.generateCollectionsDsoReport(request)
+            ReportType.EXPENSE_ANALYSIS -> activityReportsService.generateExpenseAnalysisReport(request)
+            ReportType.CARD_INVENTORY_REPORT -> activityReportsService.generateCardInventoryReport(request)
+            ReportType.FIXED_ASSETS_REGISTER -> activityReportsService.generateFixedAssetsRegisterReport(request)
+            ReportType.CURRENCY_POSITIONS -> activityReportsService.generateCurrencyPositionsReport(request)
+            ReportType.AUDIT_TRAIL -> auditReportsService.generateAuditTrailReport(request)
         }
     }
 

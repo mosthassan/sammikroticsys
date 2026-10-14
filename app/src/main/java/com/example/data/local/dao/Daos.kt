@@ -129,6 +129,17 @@ data class DrillDownLineRow(
     val memo: String
 )
 
+data class AccountPartySummaryRow(
+    val accountCode: String,
+    val partyId: String?,
+    val partyName: String,
+    val totalDebitMinor: Long,
+    val totalCreditMinor: Long
+) {
+    val netDebitMinor: Long get() = totalDebitMinor - totalCreditMinor
+    val netCreditMinor: Long get() = totalCreditMinor - totalDebitMinor
+}
+
 /**
  * Journal entries and lines write access is restricted exclusively to LedgerWriter.
  */
@@ -336,6 +347,48 @@ internal interface JournalDao {
         fromEpochDay: Long,
         toEpochDay: Long
     ): List<String>
+
+    @Query("""
+        SELECT jl.accountCode AS accountCode,
+               jl.partyId AS partyId,
+               COALESCE(p.name, '') AS partyName,
+               COALESCE(SUM(jl.baseDebitMinor), 0) AS totalDebitMinor,
+               COALESCE(SUM(jl.baseCreditMinor), 0) AS totalCreditMinor
+        FROM journal_lines jl
+        INNER JOIN journal_entries je ON jl.entryId = je.id
+        LEFT JOIN parties p ON jl.partyId = p.id
+        WHERE jl.accountCode LIKE :accountPrefix
+          AND je.type != 'CLOSING'
+          AND je.entryDateEpochDay >= :fromEpochDay
+          AND je.entryDateEpochDay <= :toEpochDay
+        GROUP BY jl.accountCode, jl.partyId
+        ORDER BY jl.accountCode ASC, totalCreditMinor DESC, totalDebitMinor DESC
+    """)
+    suspend fun getAccountPartySummariesForPeriod(
+        accountPrefix: String,
+        fromEpochDay: Long,
+        toEpochDay: Long
+    ): List<AccountPartySummaryRow>
+
+    @Query("""
+        SELECT jl.accountCode AS accountCode,
+               jl.partyId AS partyId,
+               COALESCE(p.name, '') AS partyName,
+               COALESCE(SUM(jl.baseDebitMinor), 0) AS totalDebitMinor,
+               COALESCE(SUM(jl.baseCreditMinor), 0) AS totalCreditMinor
+        FROM journal_lines jl
+        INNER JOIN journal_entries je ON jl.entryId = je.id
+        LEFT JOIN parties p ON jl.partyId = p.id
+        WHERE jl.accountCode = '1201'
+          AND je.type != 'CLOSING'
+          AND je.entryDateEpochDay <= :asOfEpochDay
+        GROUP BY jl.partyId
+        HAVING (SUM(jl.baseDebitMinor) - SUM(jl.baseCreditMinor)) > 0
+        ORDER BY (SUM(jl.baseDebitMinor) - SUM(jl.baseCreditMinor)) DESC
+    """)
+    suspend fun getOutstandingDebtors(
+        asOfEpochDay: Long
+    ): List<AccountPartySummaryRow>
 
 
     @Query("""
