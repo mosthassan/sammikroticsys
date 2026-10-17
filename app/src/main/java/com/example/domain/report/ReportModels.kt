@@ -198,15 +198,35 @@ data class ReportTable(
     val rows: List<ReportRow>
 )
 
+data class ReconciliationCheck(
+    val name: String,
+    val expectedMinor: Long,
+    val actualMinor: Long,
+    val passed: Boolean,
+    val note: String = ""
+) {
+    val discrepancyMinor: Long
+        get() = expectedMinor - actualMinor
+
+    fun formattedDiscrepancy(currency: CurrencyCode = CurrencyCode.FUNCTIONAL): String {
+        return com.example.core.model.Money(discrepancyMinor, currency).format()
+    }
+}
+
 data class ReportFooter(
-    val issuedAtEpochMilli: Long,
-    val issuedAtText: String,
-    val parametersSummary: String,
-    val entriesCount: Int,
-    val reconciled: Boolean,
+    val issuedAtEpochMilli: Long = System.currentTimeMillis(),
+    val issuedAtText: String = "",
+    val parametersSummary: String = "",
+    val entriesCount: Int = 0,
+    val checks: List<ReconciliationCheck> = emptyList(),
+    val reconciled: Boolean = checks.isEmpty() || checks.all { it.passed },
     val reconciliationDetails: String? = null,
-    val contentHashSha256: String
-)
+    val contentHashSha256: String = "",
+    val notes: String = ""
+) {
+    val failingChecks: List<ReconciliationCheck>
+        get() = checks.filterNot { it.passed }
+}
 
 data class ReportResult(
     val table: ReportTable,

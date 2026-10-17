@@ -62,6 +62,25 @@ data class StatementLineRow(
     val currency: String
 )
 
+data class DrillDownLineRow(
+    val lineId: String,
+    val entryId: String,
+    val entryNumber: Long,
+    val dateEpochDay: Long,
+    val entryType: String,
+    val docId: String?,
+    val docNumber: Long?,
+    val docType: String?,
+    val accountCode: String,
+    val partyId: String?,
+    val partyName: String,
+    val origAmountMinor: Long,
+    val currency: String,
+    val baseDebitMinor: Long,
+    val baseCreditMinor: Long,
+    val memo: String
+)
+
 data class IncomeStatementRow(
     val accountCode: String,
     val accountName: String,
@@ -373,6 +392,68 @@ internal interface JournalDao {
     """)
     suspend fun getTotalCreditsAsOf(asOfDateEpochDay: Long? = null): Long
 
+    @Query("SELECT * FROM journal_entries WHERE id = :id")
+    suspend fun getEntryById(id: String): JournalEntryEntity?
+
+    @Query("""
+        SELECT COALESCE(
+            SUM(CASE 
+                WHEN a.code LIKE '4%' THEN (jl.baseCreditMinor - jl.baseDebitMinor)
+                WHEN a.code LIKE '5%' THEN (jl.baseCreditMinor - jl.baseDebitMinor)
+                ELSE 0 END), 0
+        )
+        FROM journal_lines jl
+        INNER JOIN journal_entries je ON jl.entryId = je.id
+        INNER JOIN accounts a ON jl.accountCode = a.code
+        WHERE je.type != 'CLOSING'
+          AND (:asOfDateEpochDay IS NULL OR je.entryDateEpochDay <= :asOfDateEpochDay)
+          AND (a.code LIKE '4%' OR a.code LIKE '5%')
+    """)
+    suspend fun getUnclosedNominalBalance(asOfDateEpochDay: Long?): Long
+
+    @Query("""
+        SELECT COALESCE(
+            SUM(CASE WHEN jl.baseDebitMinor > 0 THEN jl.origMinor ELSE -jl.origMinor END), 0
+        )
+        FROM journal_lines jl
+        WHERE (jl.accountCode = '1101' OR jl.accountCode = '1102') AND jl.currency = :currency
+    """)
+    suspend fun getNetOrigBalanceForCashAccount(currency: String): Long
+
+    @Query("""
+        SELECT jl.id AS lineId,
+               je.id AS entryId,
+               je.entryNumber AS entryNumber,
+               je.entryDateEpochDay AS dateEpochDay,
+               je.type AS entryType,
+               je.docId AS docId,
+               d.docNumber AS docNumber,
+               d.type AS docType,
+               jl.accountCode AS accountCode,
+               jl.partyId AS partyId,
+               COALESCE(p.name, '') AS partyName,
+               jl.origMinor AS origAmountMinor,
+               jl.currency AS currency,
+               jl.baseDebitMinor AS baseDebitMinor,
+               jl.baseCreditMinor AS baseCreditMinor,
+               CASE WHEN jl.memo IS NOT NULL AND jl.memo != '' THEN jl.memo ELSE je.memo END AS memo
+        FROM journal_lines jl
+        INNER JOIN journal_entries je ON jl.entryId = je.id
+        LEFT JOIN documents d ON je.docId = d.id
+        LEFT JOIN parties p ON jl.partyId = p.id
+        WHERE jl.accountCode = :accountCode
+          AND (:fromEpochDay IS NULL OR je.entryDateEpochDay >= :fromEpochDay)
+          AND (:toEpochDay IS NULL OR je.entryDateEpochDay <= :toEpochDay)
+          AND (:partyId IS NULL OR jl.partyId = :partyId)
+        ORDER BY je.entryDateEpochDay ASC, je.entryNumber ASC, jl.lineNo ASC
+    """)
+    suspend fun getDrillDownLinesForAccount(
+        accountCode: String,
+        fromEpochDay: Long?,
+        toEpochDay: Long?,
+        partyId: String? = null
+    ): List<DrillDownLineRow>
+
     @Query("""
         SELECT COALESCE(
             SUM(CASE WHEN baseDebitMinor > 0 THEN origMinor ELSE -origMinor END), 0
@@ -534,6 +615,9 @@ interface FiscalPeriodDao {
 
     @Query("UPDATE fiscal_periods SET isClosed = :isClosed, closedAt = :closedAt WHERE year = :year AND month = :month")
     suspend fun setPeriodClosed(year: Int, month: Int, isClosed: Boolean, closedAt: Long?)
+
+    @Query("SELECT * FROM fiscal_periods WHERE isClosed = 1 ORDER BY year ASC, month ASC")
+    suspend fun getClosedPeriods(): List<FiscalPeriodEntity>
 }
 
 @Dao
