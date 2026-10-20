@@ -1,91 +1,99 @@
-# إعداد وتشغيل مشروع "سام ميكروتك" في Android Studio
+# دليل إعداد وتشغيل مشروع SamMikrotik في Android Studio
 
-دليل استيراد وبناء وتشغيل تطبيق **سام ميكروتك (SamMikrotik)** - نظام مالي ومحاسبي وإداري لشبكات الإنترنت وموزعي الميكروتك وفق معايير المحاسبة الدولية (IFRS).
-
----
-
-## 1. المتطلبات الأساسية للنظام وبيئة التطوير
-استناداً إلى وثائق أندرويد الرسمية وتوافق مكونات Gradle وKotlin:
-- **نظام التشغيل:** Windows 10/11 (64-bit) أو macOS أو Linux.
-- **Android Studio:** إصدار **Android Studio Ladybug (2024.2.1)** أو **Android Studio Meerkat / Otter** كحد أدنى، متوافق مع Android Gradle Plugin (AGP) 9.1+.
-- **حزمة تطوير جافا (JDK):** **JDK 21** أو **JDK 17** (مدمج مع Android Studio افتراضياً).
-- **إصدار Gradle:** 9.3.1 (محدد في `gradle/wrapper/gradle-wrapper.properties`).
-- **إصدار Kotlin:** 2.2.10.
-- **الحد الأدنى لـ SDK:** Android 7.0 (API 24).
-- **الهدف وCompile SDK:** Android 16 (API 36).
+يحتوي هذا المستند على كافة الخطوات والتعليمات الخاصة بتهيئة وتشغيل وبناء مشروع تطبيق **SamMikrotik** المحاسبي.
 
 ---
 
-## 2. استيراد المشروع من المستودع (Clone & Import)
-1. افتح الطرفية (Terminal أو Git Bash) وقم باستنساخ المشروع:
-   ```bash
-   git clone https://github.com/mosthassan/sammikroticsys.git
-   cd sammikroticsys
-   ```
-2. افتح **Android Studio**.
-3. اختر **Open** من شاشة البدء وحدد مجلد المشروع الرئيسي.
-4. انتظر حتى يكتمل مزامنة Gradle (Gradle Sync) وتحميل التبعيات.
+## 1. متطلبات بيئة التطوير
+* **نظام التشغيل:** Linux / macOS / Windows
+* **إصدار Android Studio:** Android Studio Ladybug (2024.2.1) أو أحدث
+* **إصدار JDK:** JDK 17 أو JDK 21 (موصى به: Eclipse Temurin JDK 21)
+* **Android SDK:** API Level 34 (Android 14) أو API Level 35
 
 ---
 
-## 3. إعداد وتوليد الـ Gradle Wrapper
-إذا فتحت المشروع لأول مرة وطلب Android Studio ملف الـ Wrapper:
-- سيقوم Android Studio تلقائياً باستخدام إعدادات `gradle/wrapper/gradle-wrapper.properties` لتحميل وتشغيل Gradle 9.3.1.
-- أو يمكنك تشغيل الأمر التالي من الطرفية لتوليد السكربتات التنفيذية:
-  ```bash
-  gradle wrapper --gradle-version 9.3.1
-  ```
+## 2. ملحقات Gradle المضمنة (Gradle Wrapper)
+تم توليد وتضمين ملفات مغلّف Gradle الرسمية مسبقاً داخل جذر المشروع:
+* `gradlew`: سكربت التشغيل لأنظمة Linux و macOS.
+* `gradlew.bat`: سكربت التشغيل لأنظمة Windows.
+* `gradle/wrapper/gradle-wrapper.jar`: مكتبة تشغيل المغلّف.
+* `gradle/wrapper/gradle-wrapper.properties`: إعدادات وتحديد إصدار Gradle المتوافق.
+
+لتشغيل المهام عبر الطرفية (Terminal):
+```bash
+# على أنظمة Linux / macOS
+chmod +x gradlew
+./gradlew assembleDebug
+
+# على أنظمة Windows
+gradlew.bat assembleDebug
+```
 
 ---
 
-## 4. الملفات السرية والبيئية الاختيارية
-التطبيق مصمم للعمل محلياً بالكامل 100% بدون أي مفاتيح خارجية (Offline-First). الميزات السحابية تتطلب الآتي:
-
-### أ) إعداد Firebase (اختياري للنسخ السحابي ومصادقة Google):
-1. قم بإنشاء مشروع في [Firebase Console](https://console.firebase.google.com/).
-2. أضف تطبيق Android باسم الحزمة: `com.samtecai.sammikrotic`.
-3. قم بتنزيل ملف `google-services.json` وضعه داخل المسار: `app/google-services.json`.
-4. أضف بصمات SHA-1 و SHA-256 الخاصة بجهاز التطوير (Debug Keystore) وبصمة الـ Release في لوحة تحكم Firebase لتفعيل تسجيل الدخول عبر Google (Credential Manager).
-5. في حال عدم إضافة هذا الملف، سيعمل التطبيق كاملاً محلياً مع ظهور تنبيه أن النسخ السحابي معطل.
-
-### ب) ملف مفاتيح التوقيع للإنتاج (`keystore.properties`):
-لإصدار نسخة Release موقعة لمتجر Google Play:
-1. انسخ ملف النموذج `keystore.properties.example` إلى `keystore.properties`:
-   ```bash
-   cp keystore.properties.example keystore.properties
-   ```
-2. قم بتعديل القيم بداخله لتشير إلى ملف الـ keystore الخاص بك:
-   ```properties
-   storeFile=../my-release-key.jks
-   storePassword=YourPassword
-   keyAlias=upload
-   keyPassword=YourKeyPassword
-   ```
-
----
-
-## 5. أوامر التشغيل والبناء والاختبار
-من الطرفية داخل المشروع:
-
-- **تشغيل حزمة الاختبارات الشاملة (Unit & Robolectric Tests):**
-  ```bash
-  ./gradlew testDebugUnitTest
-  # في بيئة ويندوز:
-  gradlew.bat testDebugUnitTest
-  ```
-- **بناء حزمة تصحيح الأخطاء التجريبية (Debug APK):**
+## 3. بناء واختبار بيئة التطوير (Debug & Testing)
+**لا تتطلب مهام التطوير والاختبارات المحلية أي مفاتيح أو كلمات مرور إطلاقاً.**
+يستخدم إصدار `debug` توقيع أندرويد القياسي التلقائي (`~/.android/debug.keystore`) دون الحاجة إلى ملفات إضافية:
+* **بناء نسخة التطوير (Debug APK):**
   ```bash
   ./gradlew assembleDebug
   ```
-- **بناء حزمة الإنتاج الموقعة لـ Google Play (Release AAB):**
+* **تشغيل اختبارات الوحدة واختبارات Robolectric:**
   ```bash
-  ./gradlew bundleRelease
+  ./gradlew :app:testDebugUnitTest
   ```
 
 ---
 
-## 6. استكشاف الأخطاء الشائعة وحلولها
-- **أخطاء ترميز الأرقام في ويندوز (Arabic-Indic numerals في KSP):**
-  - تم حلها مسبقاً وتضمين إعدادات إجبار اللغة والترميز الإنجليزي في `gradle.properties` لضمان توليد شفرة Room بالأرقام اللاتينية حصراً (`Locale.US`).
-- **Missing google-services.json warning:**
-  - تحذير طبيعي وغير معطّل للبناء؛ التطبيق يتخطاه تلقائياً ليعمل في وضع Offline المحلي.
+## 4. إعداد مفاتيح وتوقيع نسخة الإنتاج (Release Signing)
+لأسباب أمنية، لا يتم حفظ أي كلمات مرور أو مسارات لمفاتيح الإنتاج داخل مستودع Git. يتم قراءة إعدادات التوقيع من مصدرين:
+
+### الخيار أ: ملف `keystore.properties` (موصى به محلياً)
+أنشئ ملفاً باسم `keystore.properties` في المجلد الرئيسي للمشروع (خارج git، ومضاف إلى `.gitignore`):
+```properties
+storeFile=/path/to/your/my-upload-key.jks
+storePassword=YourKeystorePassword
+keyAlias=upload
+keyPassword=YourKeyPassword
+```
+
+### الخيار ب: متغيرات البيئة (CI/CD Pipelines)
+يمكن تمرير القيم عبر متغيرات البيئة:
+* `KEYSTORE_PATH`
+* `STORE_PASSWORD`
+* `KEY_ALIAS` (افتراضياً: `upload`)
+* `KEY_PASSWORD`
+
+### سلوك البناء عند غياب إعدادات التوقيع:
+* في حال غياب ملف `keystore.properties` أو متغيرات البيئة، تقوم مهمة `bundleRelease` بطباعة رسالة تحذيرية واضحة جداً في الطرفية:
+  ```text
+  ⚠️  [BUNDLE RELEASE SIGNING WARNING]
+  Release signing configuration is incomplete or missing.
+  To sign release bundles, define 'keystore.properties' in rootDir or set KEYSTORE_PATH, STORE_PASSWORD, KEY_PASSWORD.
+  bundleRelease will proceed generating an unsigned release bundle.
+  ```
+  وتستمر عملية البناء لإنتاج حزمة `AAB` غير موقعة دون التسبب في إيقاف خطوط الإنتاج.
+
+---
+
+## 5. ضغط وتصغير الكود (Minification & R8)
+* تم تفعيل التصغير وضغط الموارد في إصدار الإنتاج:
+  * `isMinifyEnabled = true`
+  * `isShrinkResources = true`
+* يحتوي ملف `app/proguard-rules.pro` على قواعد الاستبقاء (18 keep rules) الضرورية لحماية نماذج البيانات وقواعد Room وMoshi وFirebase من الحذف أو التشويه.
+* للتحقق من نجاح بناء نسخة الإنتاج:
+  ```bash
+  ./gradlew assembleRelease
+  ```
+
+---
+
+## 6. سياسة وتقارير الأعطال (Firebase Crashlytics)
+* **موقوف افتراضياً (Default Disabled):** تم تعطيل جمع بيانات Crashlytics افتراضياً على مستوى الـ Manifest عبر:
+  ```xml
+  <meta-data
+      android:name="firebase_crashlytics_collection_enabled"
+      android:value="false" />
+  ```
+* **بموافقة المستخدم فقط:** يتم تفعيل الخدمة برمجياً فقط بعد موافقة صريحة من المستخدم من خلال إعدادات التطبيق عبر `CrashReportingManager.setConsent(context, true)`.
+* **الخصوصية الصارمة (Zero PII):** لا يتم إرسال أي أرقام هواتف، أسماء شركاء، حسابات مالية، أو عناوين IP في أي تقرير أعطال.
