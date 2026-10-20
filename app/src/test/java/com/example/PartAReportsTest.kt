@@ -3,12 +3,8 @@ package com.example
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.core.ledger.AccountConstants
-import com.example.core.ledger.JournalDraft
-import com.example.core.ledger.JournalDraftLine
-import com.example.core.ledger.JournalEntryType
 import com.example.core.model.CurrencyCode
 import com.example.core.model.ExchangeRate
-import com.example.core.model.Money
 import com.example.core.model.RateZone
 import com.example.core.model.UuidUtils
 import com.example.data.ledger.LedgerWriter
@@ -16,7 +12,7 @@ import com.example.data.local.AppDatabase
 import com.example.data.local.entity.CurrencyRateEntity
 import com.example.data.local.entity.FiscalPeriodEntity
 import com.example.data.local.entity.PartyEntity
-import com.example.data.local.entity.TreasuryEntity
+import com.example.data.local.entity.TreasuryAccountEntity
 import com.example.domain.report.ActivityReportsService
 import com.example.domain.report.AuditReportsService
 import com.example.domain.report.PartnerSummaryResult
@@ -64,9 +60,16 @@ class PartAReportsTest {
                     id = "FP_2026_10",
                     year = 2026,
                     month = 10,
-                    startDateEpochDay = 19990L,
-                    endDateEpochDay = 20020L,
                     isClosed = false
+                )
+            )
+            db.partyDao().insertParty(
+                PartyEntity(
+                    id = "P_FOUNDER",
+                    name = "شريك مؤسس",
+                    phone = "770000000",
+                    isPartner = true,
+                    isActive = true
                 )
             )
         }
@@ -101,48 +104,29 @@ class PartAReportsTest {
         val asOf = 20000L
         val treasuryId = "TR_USD_MAIN"
         db.treasuryDao().insertTreasury(
-            TreasuryEntity(
+            TreasuryAccountEntity(
                 id = treasuryId,
                 name = "صندوق النقدية بالدولار",
                 currency = "USD",
                 glAccountCode = "1101",
+                allowNegative = false,
                 isActive = true
             )
         )
 
         // Post opening deposit: 1,000 USD @ 530 = 530,000 YER (53,000,000 minor)
-        val entry = JournalDraft(
-            type = JournalEntryType.NORMAL,
-            entryDateEpochDay = asOf,
-            memo = "إيداع افتتاحي بالدولار",
-            lines = listOf(
-                JournalDraftLine(
-                    lineNo = 1,
-                    accountCode = "1101",
-                    treasuryId = treasuryId,
-                    partyId = null,
-                    currency = CurrencyCode.USD,
-                    exchangeRateMicros = 530_000_000L,
-                    origMinor = 100_000L, // $1,000.00
-                    baseDebitMinor = 53_000_000L, // 530,000.00 YER
-                    baseCreditMinor = 0L,
-                    memo = "إيداع صندوق دولار"
-                ),
-                JournalDraftLine(
-                    lineNo = 2,
-                    accountCode = "3101",
-                    treasuryId = null,
-                    partyId = null,
-                    currency = CurrencyCode.FUNCTIONAL,
-                    exchangeRateMicros = 1_000_000L,
-                    origMinor = 53_000_000L,
-                    baseDebitMinor = 0L,
-                    baseCreditMinor = 53_000_000L,
-                    memo = "رأس مال الشركاء"
-                )
-            )
+        writer.postCapitalReceipt(
+            targetAccountCode = AccountConstants.CAPITAL,
+            partnerPartyId = "P_FOUNDER",
+            treasuryId = treasuryId,
+            fiscalYear = 2026,
+            dateEpochDay = asOf,
+            amountOrigMinor = 100_000L, // $1,000.00
+            currency = CurrencyCode.USD,
+            exchangeRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 530_000_000L),
+            notes = "إيداع صندوق دولار",
+            rateZone = RateZone.SANAA
         )
-        writer.postJournalEntry(entry)
 
         // Seed closing market rate at 540 YER/USD
         db.currencyRateDao().insertRate(
@@ -174,50 +158,31 @@ class PartAReportsTest {
     @Test
     fun testTreasuryPositionWithoutRateDisplaysNoRateAndOmitsFromTotals() = runBlocking {
         val asOf = 20000L
-        val treasuryId = "TR_USD_NO_RATE"
+        val treasuryId = "TR_EUR_NO_RATE"
         db.treasuryDao().insertTreasury(
-            TreasuryEntity(
+            TreasuryAccountEntity(
                 id = treasuryId,
-                name = "خزينة دولار بدون تسعيرة",
-                currency = "USD",
+                name = "خزينة يورو بدون تسعيرة",
+                currency = "EUR",
                 glAccountCode = "1101",
+                allowNegative = false,
                 isActive = true
             )
         )
 
-        // Post 500 USD @ 530
-        val entry = JournalDraft(
-            type = JournalEntryType.NORMAL,
-            entryDateEpochDay = asOf,
-            memo = "إيداع دولار",
-            lines = listOf(
-                JournalDraftLine(
-                    lineNo = 1,
-                    accountCode = "1101",
-                    treasuryId = treasuryId,
-                    partyId = null,
-                    currency = CurrencyCode.USD,
-                    exchangeRateMicros = 530_000_000L,
-                    origMinor = 50_000L,
-                    baseDebitMinor = 26_500_000L,
-                    baseCreditMinor = 0L,
-                    memo = "إيداع"
-                ),
-                JournalDraftLine(
-                    lineNo = 2,
-                    accountCode = "3101",
-                    treasuryId = null,
-                    partyId = null,
-                    currency = CurrencyCode.FUNCTIONAL,
-                    exchangeRateMicros = 1_000_000L,
-                    origMinor = 26_500_000L,
-                    baseDebitMinor = 0L,
-                    baseCreditMinor = 26_500_000L,
-                    memo = "رأس مال"
-                )
-            )
+        // Post 500 EUR @ 600
+        writer.postCapitalReceipt(
+            targetAccountCode = AccountConstants.CAPITAL,
+            partnerPartyId = "P_FOUNDER",
+            treasuryId = treasuryId,
+            fiscalYear = 2026,
+            dateEpochDay = asOf,
+            amountOrigMinor = 50_000L,
+            currency = CurrencyCode.EUR,
+            exchangeRate = ExchangeRate(CurrencyCode.EUR, CurrencyCode.FUNCTIONAL, 600_000_000L),
+            notes = "إيداع",
+            rateZone = RateZone.SANAA
         )
-        writer.postJournalEntry(entry)
 
         // No rate inserted for USD in SANAA zone
         val report = activityReports.generateCurrencyPositionsReport(asOf, RateZone.SANAA)
@@ -240,47 +205,28 @@ class PartAReportsTest {
         val asOf = 20000L
         val treasuryId = "TR_USD_ADEN"
         db.treasuryDao().insertTreasury(
-            TreasuryEntity(
+            TreasuryAccountEntity(
                 id = treasuryId,
                 name = "صندوق عدن",
                 currency = "USD",
                 glAccountCode = "1101",
+                allowNegative = false,
                 isActive = true
             )
         )
 
-        val entry = JournalDraft(
-            type = JournalEntryType.NORMAL,
-            entryDateEpochDay = asOf,
-            memo = "إيداع عدن",
-            lines = listOf(
-                JournalDraftLine(
-                    lineNo = 1,
-                    accountCode = "1101",
-                    treasuryId = treasuryId,
-                    partyId = null,
-                    currency = CurrencyCode.USD,
-                    exchangeRateMicros = 1_500_000_000L,
-                    origMinor = 100_000L, // $1,000
-                    baseDebitMinor = 150_000_000L,
-                    baseCreditMinor = 0L,
-                    memo = "إيداع عدن"
-                ),
-                JournalDraftLine(
-                    lineNo = 2,
-                    accountCode = "3101",
-                    treasuryId = null,
-                    partyId = null,
-                    currency = CurrencyCode.FUNCTIONAL,
-                    exchangeRateMicros = 1_000_000L,
-                    origMinor = 150_000_000L,
-                    baseDebitMinor = 0L,
-                    baseCreditMinor = 150_000_000L,
-                    memo = "رأس مال"
-                )
-            )
+        writer.postCapitalReceipt(
+            targetAccountCode = AccountConstants.CAPITAL,
+            partnerPartyId = "P_FOUNDER",
+            treasuryId = treasuryId,
+            fiscalYear = 2026,
+            dateEpochDay = asOf,
+            amountOrigMinor = 100_000L, // $1,000
+            currency = CurrencyCode.USD,
+            exchangeRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 1_500_000_000L),
+            notes = "إيداع عدن",
+            rateZone = RateZone.ADEN
         )
-        writer.postJournalEntry(entry)
 
         // Seed SANAA = 535, ADEN = 1600
         db.currencyRateDao().insertRate(
@@ -317,39 +263,40 @@ class PartAReportsTest {
         val futureDate = 20005L
         val treasuryId = "TR_DATE_BOUND"
         db.treasuryDao().insertTreasury(
-            TreasuryEntity(
+            TreasuryAccountEntity(
                 id = treasuryId,
                 name = "صندوق التقييد الزمني",
                 currency = "YER",
                 glAccountCode = "1101",
+                allowNegative = false,
                 isActive = true
             )
         )
 
         // Entry within asOf (Day 20000): 50,000 YER
-        writer.postJournalEntry(
-            JournalDraft(
-                type = JournalEntryType.NORMAL,
-                entryDateEpochDay = asOf,
-                memo = "قيد حالي",
-                lines = listOf(
-                    JournalDraftLine(1, "1101", null, treasuryId, 5_000_000L, CurrencyCode.FUNCTIONAL, 1_000_000L, 5_000_000L, 0L, "حالي"),
-                    JournalDraftLine(2, "3101", null, null, 5_000_000L, CurrencyCode.FUNCTIONAL, 1_000_000L, 0L, 5_000_000L, "رأس مال")
-                )
-            )
+        writer.postCapitalReceipt(
+            targetAccountCode = AccountConstants.CAPITAL,
+            partnerPartyId = "P_FOUNDER",
+            treasuryId = treasuryId,
+            fiscalYear = 2026,
+            dateEpochDay = asOf,
+            amountOrigMinor = 5_000_000L,
+            currency = CurrencyCode.FUNCTIONAL,
+            exchangeRate = ExchangeRate.parity(CurrencyCode.FUNCTIONAL),
+            notes = "حالي"
         )
 
         // Entry after asOf (Day 20005): 30,000 YER
-        writer.postJournalEntry(
-            JournalDraft(
-                type = JournalEntryType.NORMAL,
-                entryDateEpochDay = futureDate,
-                memo = "قيد مستقبلي",
-                lines = listOf(
-                    JournalDraftLine(1, "1101", null, treasuryId, 3_000_000L, CurrencyCode.FUNCTIONAL, 1_000_000L, 3_000_000L, 0L, "مستقبلي"),
-                    JournalDraftLine(2, "3101", null, null, 3_000_000L, CurrencyCode.FUNCTIONAL, 1_000_000L, 0L, 3_000_000L, "رأس مال")
-                )
-            )
+        writer.postCapitalReceipt(
+            targetAccountCode = AccountConstants.CAPITAL,
+            partnerPartyId = "P_FOUNDER",
+            treasuryId = treasuryId,
+            fiscalYear = 2026,
+            dateEpochDay = futureDate,
+            amountOrigMinor = 3_000_000L,
+            currency = CurrencyCode.FUNCTIONAL,
+            exchangeRate = ExchangeRate.parity(CurrencyCode.FUNCTIONAL),
+            notes = "مستقبلي"
         )
 
         val reportAsOf = activityReports.generateCurrencyPositionsReport(asOf, RateZone.SANAA)
@@ -367,21 +314,28 @@ class PartAReportsTest {
         val asOf = 20000L
         // Insert invalid line directly into journal_lines for 3201 without partyId
         val entryId = UuidUtils.newTimeOrderedId()
+        val docId = UuidUtils.newTimeOrderedId()
         db.openHelper.writableDatabase.execSQL(
             """
-            INSERT INTO journal_entries (id, fiscalYear, periodMonth, entryDateEpochDay, docType, docNumber, memo, createdAt)
-            VALUES ('$entryId', 2026, 10, $asOf, 'JV', 99, 'قيد شريك غير صالح', 1000)
+            INSERT INTO documents (id, type, fiscalYear, docNumber, dateEpochDay, currency, exchangeRateMicros, totalMinor, totalBaseMinor, status)
+            VALUES ('$docId', 'MANUAL_JV', 2026, 99, $asOf, 'YER', 1000000, 100000, 100000, 'POSTED')
             """
         )
         db.openHelper.writableDatabase.execSQL(
             """
-            INSERT INTO journal_lines (id, entryId, lineIndex, accountCode, partyId, treasuryId, currency, exchangeRateMicros, origMinor, baseDebitMinor, baseCreditMinor, memo)
+            INSERT INTO journal_entries (id, docId, entryNumber, entryDateEpochDay, type, memo, createdAt)
+            VALUES ('$entryId', '$docId', 99, $asOf, 'NORMAL', 'قيد شريك غير صالح', 1000)
+            """
+        )
+        db.openHelper.writableDatabase.execSQL(
+            """
+            INSERT INTO journal_lines (id, entryId, lineNo, accountCode, partyId, treasuryId, currency, exchangeRateMicros, origMinor, baseDebitMinor, baseCreditMinor, memo)
             VALUES ('${UuidUtils.newTimeOrderedId()}', '$entryId', 1, '3201', NULL, NULL, 'YER', 1000000, 100000, 100000, 0, 'شريك بلا معرّف')
             """
         )
         db.openHelper.writableDatabase.execSQL(
             """
-            INSERT INTO journal_lines (id, entryId, lineIndex, accountCode, partyId, treasuryId, currency, exchangeRateMicros, origMinor, baseDebitMinor, baseCreditMinor, memo)
+            INSERT INTO journal_lines (id, entryId, lineNo, accountCode, partyId, treasuryId, currency, exchangeRateMicros, origMinor, baseDebitMinor, baseCreditMinor, memo)
             VALUES ('${UuidUtils.newTimeOrderedId()}', '$entryId', 2, '1101', NULL, NULL, 'YER', 1000000, 100000, 0, 100000, 'سداد نقدي')
             """
         )
@@ -400,22 +354,29 @@ class PartAReportsTest {
     @Test
     fun testCleanFixtureReconcilesAllChecks() = runBlocking {
         val asOf = 20000L
-        val partnerId = "PARTNER_1"
-        db.partyDao().insertParty(
-            PartyEntity(id = partnerId, name = "شريك مؤسس", phone = "770000000", isPartner = true)
+        val treasuryId = "TR_CLEAN"
+        db.treasuryDao().insertTreasury(
+            TreasuryAccountEntity(
+                id = treasuryId,
+                name = "صندوق نظيف",
+                currency = "YER",
+                glAccountCode = "1101",
+                allowNegative = false,
+                isActive = true
+            )
         )
 
-        // Seed balanced transactions
-        writer.postJournalEntry(
-            JournalDraft(
-                type = JournalEntryType.NORMAL,
-                entryDateEpochDay = asOf,
-                memo = "قيد سليم متزن",
-                lines = listOf(
-                    JournalDraftLine(1, "1101", null, null, 10_000_000L, CurrencyCode.FUNCTIONAL, 1_000_000L, 10_000_000L, 0L, "صندوق"),
-                    JournalDraftLine(2, "3101", partnerId, null, 10_000_000L, CurrencyCode.FUNCTIONAL, 1_000_000L, 0L, 10_000_000L, "رأس مال")
-                )
-            )
+        // Seed balanced transaction via real LedgerWriter
+        writer.postCapitalReceipt(
+            targetAccountCode = AccountConstants.CAPITAL,
+            partnerPartyId = "P_FOUNDER",
+            treasuryId = treasuryId,
+            fiscalYear = 2026,
+            dateEpochDay = asOf,
+            amountOrigMinor = 10_000_000L,
+            currency = CurrencyCode.FUNCTIONAL,
+            exchangeRate = ExchangeRate.parity(CurrencyCode.FUNCTIONAL),
+            notes = "قيد سليم متزن"
         )
 
         val auditReport = auditReports.generateAuditReport(asOf)
@@ -429,6 +390,8 @@ class PartAReportsTest {
     @Test
     fun testNoPartnersStateHandledExplicitly() = runBlocking {
         val asOf = 20000L
+        // Delete all partners to test no partners state
+        db.openHelper.writableDatabase.execSQL("DELETE FROM parties WHERE isPartner = 1")
         val result = reportsEngine.generatePartnerSummaryReport(asOf)
         assertTrue("Result must be NoPartners state when no partners exist", result is PartnerSummaryResult.NoPartners)
     }
