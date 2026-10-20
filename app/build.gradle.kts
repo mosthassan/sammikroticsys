@@ -1,5 +1,7 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import java.io.FileInputStream
 import java.util.Locale
+import java.util.Properties
 
 // Force US Locale and UTF-8 encoding so KSP and Room code generators on Arabic Windows
 // generate ASCII numeric literals (e.g., RoomOpenDelegate(3, ...)) rather than Arabic-Indic numerals (RoomOpenDelegate(٣, ...)).
@@ -15,6 +17,22 @@ plugins {
   alias(libs.plugins.secrets)
   alias(libs.plugins.google.services)
 }
+
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties()
+if (keystorePropertiesFile.exists()) {
+  FileInputStream(keystorePropertiesFile).use { keystoreProperties.load(it) }
+}
+
+val releaseStoreFilePath: String? = keystoreProperties.getProperty("storeFile") ?: System.getenv("KEYSTORE_PATH")
+val releaseStorePassword: String? = keystoreProperties.getProperty("storePassword") ?: System.getenv("STORE_PASSWORD")
+val releaseKeyAlias: String? = keystoreProperties.getProperty("keyAlias") ?: System.getenv("KEY_ALIAS") ?: "upload"
+val releaseKeyPassword: String? = keystoreProperties.getProperty("keyPassword") ?: System.getenv("KEY_PASSWORD")
+
+val hasReleaseSigning: Boolean = !releaseStoreFilePath.isNullOrBlank() &&
+    !releaseStorePassword.isNullOrBlank() &&
+    !releaseKeyPassword.isNullOrBlank() &&
+    file(releaseStoreFilePath).exists()
 
 android {
   namespace = "com.example"
@@ -33,29 +51,29 @@ android {
   }
 
   signingConfigs {
-    create("release") {
-      val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
-      storeFile = file(keystorePath)
-      storePassword = System.getenv("STORE_PASSWORD")
-      keyAlias = "upload"
-      keyPassword = System.getenv("KEY_PASSWORD")
-    }
-    create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
+    if (hasReleaseSigning) {
+      create("release") {
+        storeFile = file(releaseStoreFilePath!!)
+        storePassword = releaseStorePassword
+        keyAlias = releaseKeyAlias
+        keyPassword = releaseKeyPassword
+      }
     }
   }
 
   buildTypes {
     release {
       isCrunchPngs = false
-      isMinifyEnabled = false
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      signingConfig = signingConfigs.getByName("release")
+      if (hasReleaseSigning) {
+        signingConfig = signingConfigs.getByName("release")
+      }
     }
-    debug { signingConfig = signingConfigs.getByName("debugConfig") }
+    debug {
+      // Uses default Android debug signing configuration. No custom keys required.
+    }
   }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11
@@ -129,6 +147,7 @@ dependencies {
   implementation(libs.firebase.ai)
   // Firestore for cloud sync
   implementation(libs.firebase.firestore)
+  implementation(libs.firebase.crashlytics)
 
   // Firebase Auth and Google Sign-In via Credential Manager
   implementation(libs.firebase.auth)
@@ -160,4 +179,26 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
+}
+
+tasks.matching { it.name.contains("bundleRelease", ignoreCase = true) }.configureEach {
+  doFirst {
+    if (!hasReleaseSigning) {
+      val missing = buildList {
+        if (releaseStoreFilePath.isNullOrBlank() || !file(releaseStoreFilePath).exists()) add("storeFile (${releaseStoreFilePath ?: "not set"})")
+        if (releaseStorePassword.isNullOrBlank()) add("storePassword")
+        if (releaseKeyPassword.isNullOrBlank()) add("keyPassword")
+      }
+      val warningMsg = """
+        |==========================================================================================
+        |⚠️  [BUNDLE RELEASE SIGNING WARNING]
+        |Release signing configuration is incomplete or missing. Missing: ${missing.joinToString(", ")}.
+        |To sign release bundles, define 'keystore.properties' in rootDir or set KEYSTORE_PATH, STORE_PASSWORD, KEY_PASSWORD.
+        |bundleRelease will proceed generating an unsigned release bundle.
+        |==========================================================================================
+      """.trimMargin()
+      println(warningMsg)
+      logger.warn(warningMsg)
+    }
+  }
 }

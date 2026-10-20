@@ -9,6 +9,7 @@ import com.example.core.model.RateZone
 import com.example.core.model.UuidUtils
 import com.example.data.ledger.LedgerWriter
 import com.example.data.local.AppDatabase
+import com.example.data.local.entity.AccountEntity
 import com.example.data.local.entity.CurrencyRateEntity
 import com.example.data.local.entity.FiscalPeriodEntity
 import com.example.data.local.entity.PartyEntity
@@ -46,7 +47,48 @@ class PartAReportsTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         db = AppDatabase.createInMemory(context)
         AppDatabase.installTriggers(db.openHelper.writableDatabase)
-        AppDatabase.seedDefaultData(db.openHelper.writableDatabase)
+
+        // Seed core organization, walk-in party, and accounts without seeding default exchange rates
+        db.openHelper.writableDatabase.execSQL("""
+            INSERT OR IGNORE INTO organizations (id, name, taxNumber, functionalCurrency, fiscalYearStartMonth, isInitialized, primaryRateZone, equityShareMode, createdAt)
+            VALUES ('DEFAULT_ORG', 'شبكة سام اللاسلكية', '', 'YER', 1, 1, 'SANAA', 'DERIVED_FROM_CAPITAL', strftime('%s','now') * 1000)
+        """)
+        db.openHelper.writableDatabase.execSQL("""
+            INSERT OR IGNORE INTO parties (id, name, phone, isCustomer, isVendor, isPartner, equityPercentageBasisPoints, creditLimitMinor, isActive, createdAt)
+            VALUES ('${AppDatabase.WALK_IN_CASH_PARTY_ID}', 'عميل نقدي (مبيعات فورية)', '', 1, 0, 0, 0, 0, 1, strftime('%s','now') * 1000)
+        """)
+
+        val accounts = listOf(
+            AccountEntity(AccountConstants.CASH_VAULT, "النقدية بالصندوق", "ASSET", isDebitNormal = true, isLocked = true),
+            AccountEntity(AccountConstants.BANKS_WALLETS, "البنوك والمحافظ الإلكترونية", "ASSET", isDebitNormal = true, isLocked = true),
+            AccountEntity(AccountConstants.ACCOUNTS_RECEIVABLE, "العملاء والوكلاء", "ASSET", isDebitNormal = true, isLocked = true),
+            AccountEntity(AccountConstants.CARD_INVENTORY_RESERVE, "مخزون الكروت (محجوز)", "ASSET", isDebitNormal = true, isLocked = true, isActive = false),
+            AccountEntity(AccountConstants.FIXED_ASSETS_NETWORK, "أجهزة ومعدات الشبكة", "ASSET", isDebitNormal = true, isLocked = true),
+            AccountEntity(AccountConstants.ACCUMULATED_DEPRECIATION, "مجمع الإهلاك", "ASSET", isDebitNormal = false, isLocked = true),
+            AccountEntity(AccountConstants.ACCOUNTS_PAYABLE, "الموردون", "LIABILITY", isDebitNormal = false, isLocked = true),
+            AccountEntity(AccountConstants.CAPITAL, "رأس المال", "EQUITY", isDebitNormal = false, isLocked = true),
+            AccountEntity(AccountConstants.PARTNER_CURRENT, "جاري الشركاء", "EQUITY", isDebitNormal = false, isLocked = true),
+            AccountEntity(AccountConstants.RETAINED_EARNINGS, "الأرباح المرحّلة", "EQUITY", isDebitNormal = false, isLocked = true),
+            AccountEntity(AccountConstants.CARD_SALES_REVENUE, "إيرادات مبيعات الكروت", "REVENUE", isDebitNormal = false, isLocked = true),
+            AccountEntity(AccountConstants.SALES_RETURNS, "مردودات ومسموحات المبيعات", "REVENUE", isDebitNormal = true, isLocked = true),
+            AccountEntity(AccountConstants.DIRECT_SERVICE_REVENUE, "إيرادات الاشتراكات المباشرة والخدمات", "REVENUE", isDebitNormal = false, isLocked = true),
+            AccountEntity(AccountConstants.REALIZED_FX_GAIN, "أرباح فروق العملة المحققة", "REVENUE", isDebitNormal = false, isLocked = true),
+            AccountEntity(AccountConstants.UNREALIZED_FX_GAIN, "أرباح فروق العملة غير المحققة (إعادة التقييم)", "REVENUE", isDebitNormal = false, isLocked = true),
+            AccountEntity(AccountConstants.DIRECT_ISP_SERVICE_COST, "تكلفة الخدمة المباشرة (اشتراكات الإنترنت)", "EXPENSE", isDebitNormal = true, isLocked = true),
+            AccountEntity(AccountConstants.OPERATING_EXPENSES, "مصاريف تشغيل وعمومية (ديزل/كهرباء)", "EXPENSE", isDebitNormal = true, isLocked = true),
+            AccountEntity(AccountConstants.MAINTENANCE_SPARES, "صيانة وقطع غيار", "EXPENSE", isDebitNormal = true, isLocked = true),
+            AccountEntity(AccountConstants.DEPRECIATION_EXPENSE, "إهلاك الأصول", "EXPENSE", isDebitNormal = true, isLocked = true),
+            AccountEntity(AccountConstants.SALARIES_STAFF, "رواتب وأجور وفنيون", "EXPENSE", isDebitNormal = true, isLocked = true),
+            AccountEntity(AccountConstants.MISC_EXPENSES, "مصاريف متنوعة", "EXPENSE", isDebitNormal = true, isLocked = true),
+            AccountEntity(AccountConstants.REALIZED_FX_LOSS, "خسائر فروق العملة المحققة", "EXPENSE", isDebitNormal = true, isLocked = true),
+            AccountEntity(AccountConstants.UNREALIZED_FX_LOSS, "خسائر فروق العملة غير المحققة (إعادة التقييم)", "EXPENSE", isDebitNormal = true, isLocked = true)
+        )
+        accounts.forEach { acc ->
+            db.openHelper.writableDatabase.execSQL("""
+                INSERT OR IGNORE INTO accounts (code, name, type, isDebitNormal, isLocked, isActive)
+                VALUES ('${acc.code}', '${acc.name}', '${acc.type}', ${if (acc.isDebitNormal) 1 else 0}, ${if (acc.isLocked) 1 else 0}, ${if (acc.isActive) 1 else 0})
+            """)
+        }
 
         writer = LedgerWriter(db, enableInvariantValidation = false)
         resolver = ExchangeRateResolver(db)
@@ -158,19 +200,19 @@ class PartAReportsTest {
     @Test
     fun testTreasuryPositionWithoutRateDisplaysNoRateAndOmitsFromTotals() = runBlocking {
         val asOf = 20000L
-        val treasuryId = "TR_EUR_NO_RATE"
+        val treasuryId = "TR_USD_NO_RATE"
         db.treasuryDao().insertTreasury(
             TreasuryAccountEntity(
                 id = treasuryId,
-                name = "خزينة يورو بدون تسعيرة",
-                currency = "EUR",
+                name = "خزينة دولار بدون تسعيرة",
+                currency = "USD",
                 glAccountCode = "1101",
                 allowNegative = false,
                 isActive = true
             )
         )
 
-        // Post 500 EUR @ 600
+        // Post 500 USD @ 530
         writer.postCapitalReceipt(
             targetAccountCode = AccountConstants.CAPITAL,
             partnerPartyId = "P_FOUNDER",
@@ -178,8 +220,8 @@ class PartAReportsTest {
             fiscalYear = 2026,
             dateEpochDay = asOf,
             amountOrigMinor = 50_000L,
-            currency = CurrencyCode.EUR,
-            exchangeRate = ExchangeRate(CurrencyCode.EUR, CurrencyCode.FUNCTIONAL, 600_000_000L),
+            currency = CurrencyCode.USD,
+            exchangeRate = ExchangeRate(CurrencyCode.USD, CurrencyCode.FUNCTIONAL, 530_000_000L),
             notes = "إيداع",
             rateZone = RateZone.SANAA
         )
@@ -312,13 +354,12 @@ class PartAReportsTest {
     @Test
     fun testOrphanedPartnerLineFailsReconciliation() = runBlocking {
         val asOf = 20000L
-        // Insert invalid line directly into journal_lines for 3201 without partyId
         val entryId = UuidUtils.newTimeOrderedId()
         val docId = UuidUtils.newTimeOrderedId()
         db.openHelper.writableDatabase.execSQL(
             """
-            INSERT INTO documents (id, type, fiscalYear, docNumber, dateEpochDay, currency, exchangeRateMicros, totalMinor, totalBaseMinor, status)
-            VALUES ('$docId', 'MANUAL_JV', 2026, 99, $asOf, 'YER', 1000000, 100000, 100000, 'POSTED')
+            INSERT INTO documents (id, type, fiscalYear, docNumber, partyId, dateEpochDay, currency, exchangeRateMicros, totalMinor, totalBaseMinor, status)
+            VALUES ('$docId', 'MANUAL_JV', 2026, 99, 'P_FOUNDER', $asOf, 'YER', 1000000, 100000, 100000, 'POSTED')
             """
         )
         db.openHelper.writableDatabase.execSQL(
