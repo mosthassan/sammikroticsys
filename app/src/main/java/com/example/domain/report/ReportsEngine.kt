@@ -355,7 +355,6 @@ class ReportsEngine(
             parametersSummary = "الفترة: $fromEpoch إلى $toEpoch",
             entriesCount = rows.size,
             checks = checks,
-            reconciled = true,
             reconciliationDetails = "تقرير الأرباح المقارنة متطابق محاسبياً",
             contentHashSha256 = ReportHashCalculator.computeSha256(table)
         )
@@ -414,7 +413,6 @@ class ReportsEngine(
             parametersSummary = "الشريك: ${p?.name ?: "الكل"}",
             entriesCount = rows.size,
             checks = checks,
-            reconciled = true,
             reconciliationDetails = "كشف حساب الشريك مطابق للقيود المسجلة",
             contentHashSha256 = ReportHashCalculator.computeSha256(table)
         )
@@ -512,7 +510,6 @@ class ReportsEngine(
             issuedAtText = LocalDate.now().toString(),
             parametersSummary = "الفترة: $fromEpoch إلى $toEpoch",
             entriesCount = rows.size,
-            reconciled = true,
             reconciliationDetails = "قائمة التدفق النقدي مطابقة لحركة الصناديق",
             contentHashSha256 = ReportHashCalculator.computeSha256(table)
         )
@@ -561,7 +558,6 @@ class ReportsEngine(
             issuedAtText = LocalDate.now().toString(),
             parametersSummary = "التاريخ: $asOfEpoch",
             entriesCount = rows.size,
-            reconciled = true,
             reconciliationDetails = "سجل الصندوق مطابق لحركة الخزينة",
             contentHashSha256 = ReportHashCalculator.computeSha256(table)
         )
@@ -626,7 +622,6 @@ class ReportsEngine(
             issuedAtText = LocalDate.now().toString(),
             parametersSummary = "كما في: $asOfEpoch",
             entriesCount = rows.size,
-            reconciled = true,
             reconciliationDetails = "مؤشرات التحصيل مستخرجة من واقع الفواتير غير المسددة",
             contentHashSha256 = ReportHashCalculator.computeSha256(table)
         )
@@ -661,7 +656,6 @@ class ReportsEngine(
             issuedAtText = LocalDate.now().toString(),
             parametersSummary = "كما في: $asOfEpoch",
             entriesCount = rows.size,
-            reconciled = true,
             reconciliationDetails = "أعمار الديون مطابقة لحساب الذمم المدينة 1201",
             contentHashSha256 = ReportHashCalculator.computeSha256(table)
         )

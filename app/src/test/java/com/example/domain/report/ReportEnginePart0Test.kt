@@ -118,9 +118,8 @@ class ReportEnginePart0Test {
      * documents, or audit_log rows.
      */
     @Test
-    fun test02_reportGenerationIsPureReadOnly() {
-        runBlocking {
-            // Post a real purchase invoice to have records
+    fun test02_reportGenerationIsPureReadOnly() = runBlocking<Unit> {
+        // Post a real purchase invoice to have records
             writer.postPurchaseInvoice(
                 vendorPartyId = "vendor_part0",
                 fiscalYear = 2026,
@@ -166,7 +165,6 @@ class ReportEnginePart0Test {
             assertEquals(initialDocsCount, finalDocsCount)
             assertEquals(initialLinesCount, finalLinesCount)
             assertEquals(initialAuditCount, finalAuditCount)
-        }
     }
 
     /**

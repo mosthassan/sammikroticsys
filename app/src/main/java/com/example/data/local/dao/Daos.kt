@@ -778,6 +778,9 @@ interface CurrencyRateDao {
 interface AuditLogDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertLog(log: AuditLogEntity)
+
+    @Query("SELECT * FROM audit_log ORDER BY timestamp ASC")
+    suspend fun getAllLogsSync(): List<AuditLogEntity>
 }
 
 @Dao
