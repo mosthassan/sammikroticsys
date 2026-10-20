@@ -98,7 +98,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     val statementsUseCase = FinancialStatementsUseCase(db)
     val statementOfAccountUseCase = StatementOfAccountUseCase(db)
-    val backupRestoreUseCase = BackupRestoreUseCase(db)
+    val backupRestoreUseCase = BackupRestoreUseCase(db, networkRepository, networkRepository, application)
     val batchImportUseCase = BatchImportUseCase(db, writer)
     val exchangeRateResolver = ExchangeRateResolver(db)
     val partnerEquityUseCase = com.example.domain.usecase.PartnerEquityUseCase(db, writer)
