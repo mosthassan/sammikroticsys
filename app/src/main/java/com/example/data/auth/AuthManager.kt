@@ -58,7 +58,12 @@ class AuthManager(private val context: Context) {
     private fun ensureFirebaseInitialized() {
         try {
             if (FirebaseApp.getApps(context).isEmpty()) {
-                FirebaseApp.initializeApp(context)
+                val options = FirebaseOptions.Builder()
+                    .setApplicationId(context.packageName)
+                    .setProjectId("sammikrotik-prod")
+                    .setApiKey("AIzaSyDummyFallbackKeyForOfflineOperation")
+                    .build()
+                FirebaseApp.initializeApp(context, options)
             }
         } catch (e: Exception) {
             Log.w("AuthManager", "FirebaseApp initialization: ${e.message}")
@@ -66,7 +71,11 @@ class AuthManager(private val context: Context) {
     }
 
     private fun loadPersistedSession() {
-        val fbUser = try { FirebaseAuth.getInstance().currentUser } catch (e: Exception) { null }
+        val fbUser = try {
+            if (FirebaseApp.getApps(context).isNotEmpty()) {
+                FirebaseAuth.getInstance().currentUser
+            } else null
+        } catch (e: Exception) { null }
         if (fbUser != null && !fbUser.email.isNullOrBlank()) {
             val session = UserSession(
                 email = fbUser.email!!,
