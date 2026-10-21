@@ -3,6 +3,7 @@ package com.example.ui.viewmodel
 import android.app.Activity
 import android.app.Application
 import android.content.Context
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.tasks.await
@@ -68,6 +69,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 data class DashboardSummary(
@@ -200,17 +202,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun checkForRemoteBackupIfEmpty() {
-        viewModelScope.launch {
-            val user = currentUser.value
-            if (user != null && user.isSignedIn) {
-                val docCount = db.documentDao().getAllDocumentsSync().size
-                val linesCount = db.journalDao().getAllLinesSync().size
-                if (docCount == 0 && linesCount == 0) {
-                    val meta = syncManager.checkRemoteBackup(user.uid, user.email)
-                    if (meta != null && meta.totalRecords > 0) {
-                        pendingCloudRestorePrompt.value = meta
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val user = currentUser.value
+                if (user != null && user.isSignedIn) {
+                    val docCount = db.documentDao().getAllDocumentsSync().size
+                    val linesCount = db.journalDao().getAllLinesSync().size
+                    if (docCount == 0 && linesCount == 0) {
+                        val meta = syncManager.checkRemoteBackup(user.uid, user.email)
+                        if (meta != null && meta.totalRecords > 0) {
+                            pendingCloudRestorePrompt.value = meta
+                        }
                     }
                 }
+            } catch (e: Exception) {
+                Log.w("AppViewModel", "checkForRemoteBackupIfEmpty error: ${e.message}")
             }
         }
     }
@@ -226,44 +232,48 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshDashboard() {
-        viewModelScope.launch {
-            val todayEpoch = System.currentTimeMillis() / 86400000L
-            val filter = selectedPeriodFilter.value
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val todayEpoch = System.currentTimeMillis() / 86400000L
+                val filter = selectedPeriodFilter.value
 
-            val startEpoch: Long? = when (filter) {
-                PeriodFilter.TODAY -> todayEpoch
-                PeriodFilter.THIS_WEEK -> todayEpoch - 7
-                PeriodFilter.THIS_MONTH -> todayEpoch - 30
-                PeriodFilter.ALL_TIME -> null
+                val startEpoch: Long? = when (filter) {
+                    PeriodFilter.TODAY -> todayEpoch
+                    PeriodFilter.THIS_WEEK -> todayEpoch - 7
+                    PeriodFilter.THIS_MONTH -> todayEpoch - 30
+                    PeriodFilter.ALL_TIME -> null
+                }
+
+                val income = statementsUseCase.generateIncomeStatement(startEpoch, todayEpoch)
+                val receivables = repository.getNetBalanceForAccount(AccountConstants.ACCOUNTS_RECEIVABLE)
+                val payables = -repository.getNetBalanceForAccount(AccountConstants.ACCOUNTS_PAYABLE)
+
+                // Treasury balances
+                val treasuries = db.treasuryDao().getAllTreasuriesSync()
+                val trMap = mutableMapOf<String, Long>()
+                treasuries.forEach { tr ->
+                    val bal = repository.getTreasuryBalance(tr.id)
+                    trMap[tr.currency] = (trMap[tr.currency] ?: 0L) + bal
+                }
+
+                // Invariant check
+                val invRes = repository.runInvariantCheck()
+                _invariantResult.value = invRes
+
+                _dashboardSummary.value = DashboardSummary(
+                    totalSalesPeriodMinor = income.netRevenueMinor,
+                    totalReceiptsPeriodMinor = 0L, // Derived
+                    totalExpensesPeriodMinor = income.directIspCostMinor + income.totalOperatingExpensesMinor,
+                    netCashFlowMinor = income.netProfitMinor,
+                    totalReceivablesMinor = receivables,
+                    totalPayablesMinor = payables,
+                    treasuryBalancesByCurrency = trMap,
+                    openInvoiceCount = 0,
+                    isBalanced = invRes.isValid
+                )
+            } catch (e: Exception) {
+                Log.e("AppViewModel", "Failed to refresh dashboard: ${e.message}", e)
             }
-
-            val income = statementsUseCase.generateIncomeStatement(startEpoch, todayEpoch)
-            val receivables = repository.getNetBalanceForAccount(AccountConstants.ACCOUNTS_RECEIVABLE)
-            val payables = -repository.getNetBalanceForAccount(AccountConstants.ACCOUNTS_PAYABLE)
-
-            // Treasury balances
-            val treasuries = db.treasuryDao().getAllTreasuriesSync()
-            val trMap = mutableMapOf<String, Long>()
-            treasuries.forEach { tr ->
-                val bal = repository.getTreasuryBalance(tr.id)
-                trMap[tr.currency] = (trMap[tr.currency] ?: 0L) + bal
-            }
-
-            // Invariant check
-            val invRes = repository.runInvariantCheck()
-            _invariantResult.value = invRes
-
-            _dashboardSummary.value = DashboardSummary(
-                totalSalesPeriodMinor = income.netRevenueMinor,
-                totalReceiptsPeriodMinor = 0L, // Derived
-                totalExpensesPeriodMinor = income.directIspCostMinor + income.totalOperatingExpensesMinor,
-                netCashFlowMinor = income.netProfitMinor,
-                totalReceivablesMinor = receivables,
-                totalPayablesMinor = payables,
-                treasuryBalancesByCurrency = trMap,
-                openInvoiceCount = 0,
-                isBalanced = invRes.isValid
-            )
         }
     }
 
@@ -273,9 +283,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun runInvariantCheck() {
-        viewModelScope.launch {
-            val result = repository.runInvariantCheck()
-            _invariantResult.value = result
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val result = repository.runInvariantCheck()
+                _invariantResult.value = result
+            } catch (e: Exception) {
+                Log.e("AppViewModel", "runInvariantCheck failed: ${e.message}", e)
+            }
         }
     }
 
@@ -802,7 +816,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         notes: String,
         onSuccess: () -> Unit
     ) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val now = getLocalNow()
                 val fiscalYear = now.year
@@ -1238,7 +1252,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun importPartiesList(parties: List<PartyEntity>) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val existing = db.partyDao().getAllPartiesSync().map { it.name.trim().lowercase() }.toSet()
                 var added = 0
@@ -1256,7 +1270,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun postImportedPurchases(drafts: List<DataJsonHelper.ImportedPurchaseDraft>) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 var postedCount = 0
                 val now = java.time.LocalDate.now()

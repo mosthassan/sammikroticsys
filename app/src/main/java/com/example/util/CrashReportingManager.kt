@@ -36,7 +36,7 @@ object CrashReportingManager {
     fun applyConsentState(granted: Boolean) {
         try {
             FirebaseCrashlytics.getInstance().setCrashlyticsCollectionEnabled(granted)
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             // Handled gracefully in environments without Google Play Services or during unit tests
         }
     }
@@ -49,8 +49,8 @@ object CrashReportingManager {
             if (throwable != null) {
                 crashlytics.recordException(throwable)
             }
-        } catch (_: Exception) {
-            // Ignored if collection is disabled
+        } catch (_: Throwable) {
+            // Ignored if collection is disabled or unavailable
         }
     }
 }

@@ -1,6 +1,7 @@
 package com.example.ui.inspector
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.core.ledger.AccountConstants
@@ -20,12 +21,14 @@ import com.example.data.local.entity.JournalLineEntity
 import com.example.data.local.entity.PartyEntity
 import com.example.data.repository.AccountingRepository
 import com.example.domain.usecase.ExchangeRateResolver
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class EntryWithLines(
     val entry: JournalEntryEntity,
@@ -62,44 +65,54 @@ class InspectorViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun refreshAll() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             runInvariantCheck()
             loadEntriesWithLines()
         }
     }
 
     fun runInvariantCheck() {
-        viewModelScope.launch {
-            val result = repository.runInvariantCheck()
-            _invariantResult.value = result
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val result = repository.runInvariantCheck()
+                _invariantResult.value = result
+            } catch (e: Exception) {
+                Log.e("InspectorViewModel", "runInvariantCheck error: ${e.message}", e)
+            }
         }
     }
 
-    private suspend fun loadEntriesWithLines() {
-        val openHelper = db.openHelper.readableDatabase
-        val cursor = openHelper.query("SELECT id, docId, entryNumber, entryDateEpochDay, type, memo, createdAt FROM journal_entries ORDER BY entryDateEpochDay DESC, entryNumber DESC")
-        val entries = mutableListOf<JournalEntryEntity>()
-        cursor.use { c ->
-            while (c.moveToNext()) {
-                entries.add(
-                    JournalEntryEntity(
-                        id = c.getString(0),
-                        docId = c.getString(1),
-                        entryNumber = c.getLong(2),
-                        entryDateEpochDay = c.getLong(3),
-                        type = c.getString(4),
-                        memo = c.getString(5),
-                        createdAt = c.getLong(6)
+    private suspend fun loadEntriesWithLines() = withContext(Dispatchers.IO) {
+        try {
+            val openHelper = db.openHelper.readableDatabase
+            val cursor = openHelper.query("SELECT id, docId, entryNumber, entryDateEpochDay, type, memo, createdAt FROM journal_entries ORDER BY entryDateEpochDay DESC, entryNumber DESC")
+            val entries = mutableListOf<JournalEntryEntity>()
+            cursor.use { c ->
+                var count = 0
+                while (c.moveToNext() && count < 200) {
+                    entries.add(
+                        JournalEntryEntity(
+                            id = c.getString(0),
+                            docId = c.getString(1),
+                            entryNumber = c.getLong(2),
+                            entryDateEpochDay = c.getLong(3),
+                            type = c.getString(4),
+                            memo = c.getString(5),
+                            createdAt = c.getLong(6)
+                        )
                     )
-                )
+                    count++
+                }
             }
-        }
 
-        val full = entries.map { entry ->
-            val lines = repository.getLinesForEntry(entry.id)
-            EntryWithLines(entry, lines)
+            val full = entries.map { entry ->
+                val lines = repository.getLinesForEntry(entry.id)
+                EntryWithLines(entry, lines)
+            }
+            _entriesWithLines.value = full
+        } catch (e: Exception) {
+            Log.e("InspectorViewModel", "loadEntriesWithLines error: ${e.message}", e)
         }
-        _entriesWithLines.value = full
     }
 
     /**
