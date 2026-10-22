@@ -17,6 +17,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 
 /**
@@ -34,15 +37,47 @@ data class BackupManifest(
     val documentsCount: Int = 0,
     val journalLinesCount: Int = 0,
     val partiesCount: Int = 0,
+    val packagesCount: Int = 0,
+    val treasuriesCount: Int = 0,
+    val assetsCount: Int = 0,
+    val allocationsCount: Int = 0,
+    val currencyRatesCount: Int = 0,
+    val networkDevicesCount: Int = 0,
     val lastEntryNumber: Long = 0L,
     val isEncrypted: Boolean = false
 )
+
+data class TableCompletenessItem(
+    val tableName: String,
+    val localCount: Int,
+    val backupCount: Int,
+    val isMatch: Boolean
+)
+
+data class CompletenessReport(
+    val backupId: String,
+    val backupCreatedAt: Long,
+    val deviceId: String,
+    val items: List<TableCompletenessItem>,
+    val totalLocalRecords: Int,
+    val totalBackupRecords: Int
+)
+
+sealed class ConflictCheckResult {
+    object NoConflict : ConflictCheckResult()
+    data class Conflict(
+        val latestCloudBackup: BackupManifest,
+        val localRecordsCount: Int,
+        val warningMessage: String
+    ) : ConflictCheckResult()
+}
 
 /**
  * Enterprise Production-Grade Chunked Cloud Backup Manager.
  * Complies with Firestore 1MB limits by chunking payloads (<= 500KB) under users/{uid}/backups/{backupId}/chunks/{n}.
  * Keeps the 5 most recent backups, validates ledger invariants before upload and after reassembly,
- * supports passphrase encryption, and provides safe restore with local safety snapshots.
+ * supports passphrase encryption, provides safe restore with local safety snapshots, and delivers
+ * table-by-table completeness reports and multi-device conflict guards.
  */
 class ChunkedBackupManager(
     private val context: Context,
@@ -52,7 +87,7 @@ class ChunkedBackupManager(
     companion object {
         private const val TAG = "ChunkedBackupManager"
         const val CURRENT_SCHEMA_VERSION = 4
-        private const val MAX_RETAINED_BACKUPS = 5
+        const val MAX_RETAINED_BACKUPS = 5
         private const val PREFS_NAME = "sammikrotik_backup_prefs"
         private const val KEY_LAST_BACKUP_ID = "last_backup_id"
         private const val KEY_LAST_BACKUP_TIME = "last_backup_time"
@@ -77,9 +112,6 @@ class ChunkedBackupManager(
     private val _syncMetadata = MutableStateFlow<SyncMetadata?>(null)
     val syncMetadata: StateFlow<SyncMetadata?> = _syncMetadata.asStateFlow()
 
-    private val _syncHistory = MutableStateFlow<List<SyncLogItem>>(emptyList())
-    val syncHistory: StateFlow<List<SyncLogItem>> = _syncHistory.asStateFlow()
-
     init {
         loadLastMetadata()
     }
@@ -97,10 +129,69 @@ class ChunkedBackupManager(
     private fun getAuthenticatedUid(explicitUid: String? = null): String {
         return try {
             FirebaseAuth.getInstance().currentUser?.uid?.takeIf { it.isNotBlank() }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         } ?: explicitUid?.trim()?.takeIf { !it.isNullOrBlank() }
         ?: ""
+    }
+
+    /**
+     * Checks whether remote cloud has a newer backup from another device/session.
+     */
+    suspend fun checkConflictBeforeUpload(explicitUid: String? = null): ConflictCheckResult = withContext(Dispatchers.IO) {
+        val uid = getAuthenticatedUid(explicitUid)
+        if (uid.isBlank()) return@withContext ConflictCheckResult.NoConflict
+        val backups = listBackups(uid)
+        if (backups.isEmpty()) return@withContext ConflictCheckResult.NoConflict
+
+        val latest = backups.first()
+        val lastLocalUploadTime = prefs.getLong(KEY_LAST_BACKUP_TIME, 0L)
+
+        if (latest.createdAt > lastLocalUploadTime && latest.deviceId != android.os.Build.MODEL) {
+            val localTotal = db.documentDao().getAllDocumentsSync().size + db.journalDao().getAllLinesSync().size
+            val sdf = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault())
+            val dateStr = sdf.format(Date(latest.createdAt))
+            return@withContext ConflictCheckResult.Conflict(
+                latestCloudBackup = latest,
+                localRecordsCount = localTotal,
+                warningMessage = "تنبيه تعارض: توجد نسخة سحابية أحدث أنشئت من جهاز (${latest.deviceId}) بتاريخ $dateStr. إذا تابعت، سيتم حفظ نسختك الحالية بشكل مستقل والاحتفاظ بآخر 5 نسخ."
+            )
+        }
+        ConflictCheckResult.NoConflict
+    }
+
+    /**
+     * Compares local table record counts against a cloud backup manifest.
+     */
+    suspend fun generateCompletenessReport(manifest: BackupManifest): CompletenessReport = withContext(Dispatchers.IO) {
+        val localDocs = db.documentDao().getAllDocumentsSync().size
+        val localLines = db.journalDao().getAllLinesSync().size
+        val localParties = db.partyDao().getAllPartiesSync().size
+        val localPkgs = db.cardPackageDao().getAllPackagesSync().size
+        val localTreasuries = db.treasuryDao().getAllTreasuriesSync().size
+        val localAssets = db.assetDao().getAllAssetsSync().size
+        val localAllocations = db.allocationDao().getAllActiveAllocationsSync().size
+        val localRates = db.currencyRateDao().getAllRatesSync().size
+
+        val items = listOf(
+            TableCompletenessItem("الفواتير والمستندات", localDocs, manifest.documentsCount, localDocs == manifest.documentsCount),
+            TableCompletenessItem("أسطر القيود المحاسبية", localLines, manifest.journalLinesCount, localLines == manifest.journalLinesCount),
+            TableCompletenessItem("العملاء والموردين والشركاء", localParties, manifest.partiesCount, localParties == manifest.partiesCount),
+            TableCompletenessItem("باقات وكروت الشبكة", localPkgs, manifest.packagesCount, localPkgs == manifest.packagesCount),
+            TableCompletenessItem("الصناديق والحسابات", localTreasuries, manifest.treasuriesCount, localTreasuries == manifest.treasuriesCount),
+            TableCompletenessItem("الأصول الثابتة والمعدات", localAssets, manifest.assetsCount, localAssets == manifest.assetsCount),
+            TableCompletenessItem("تخصيصات السداد والفواتير", localAllocations, manifest.allocationsCount, localAllocations == manifest.allocationsCount),
+            TableCompletenessItem("أسعار الصرف التاريخية", localRates, manifest.currencyRatesCount, localRates == manifest.currencyRatesCount)
+        )
+
+        CompletenessReport(
+            backupId = manifest.backupId,
+            backupCreatedAt = manifest.createdAt,
+            deviceId = manifest.deviceId,
+            items = items,
+            totalLocalRecords = items.sumOf { it.localCount },
+            totalBackupRecords = items.sumOf { it.backupCount }
+        )
     }
 
     /**
@@ -117,13 +208,12 @@ class ChunkedBackupManager(
         }
 
         val fs = firestore ?: run {
-            _syncState.value = SyncState.Error("خدمات Firebase غير مهيأة أو غير متوفرة")
+            _syncState.value = SyncState.Error("خدمات Firebase غير متوفرة")
             return@withContext Result.failure(IllegalStateException("Firestore unavailable"))
         }
 
         try {
             _syncState.value = SyncState.InProgress("التحقق من صحة وتوازن القيود المحاسبية...", 0.1f)
-            // 1. Verify ledger invariants before uploading anything
             val validation = LedgerInvariants(db).verifyAll()
             if (!validation.isValid) {
                 val err = "تم رفض الرفع: القيود المحاسبية غير متوازنة محلياً (${validation.violations.firstOrNull()?.details})"
@@ -145,11 +235,18 @@ class ChunkedBackupManager(
             val chunks = ChunkedBackupHelper.splitIntoChunks(finalPayload)
             val backupId = "backup_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}"
 
-            // Extract entity counts for manifest
+            // Extract entity counts for completeness report & manifest
             val rootObj = JSONObject(jsonSnapshot)
             val docCount = rootObj.optJSONArray("documents")?.length() ?: 0
             val lineCount = rootObj.optJSONArray("journal_lines")?.length() ?: 0
             val partyCount = rootObj.optJSONArray("parties")?.length() ?: 0
+            val pkgCount = rootObj.optJSONArray("card_packages")?.length() ?: 0
+            val trCount = rootObj.optJSONArray("treasury_accounts")?.length() ?: 0
+            val assetCount = rootObj.optJSONArray("assets")?.length() ?: 0
+            val allocCount = rootObj.optJSONArray("allocations")?.length() ?: 0
+            val rateCount = rootObj.optJSONArray("currency_rates")?.length() ?: 0
+            val netDevCount = rootObj.optJSONArray("network_devices")?.length() ?: 0
+
             val entriesArr = rootObj.optJSONArray("journal_entries")
             var maxEntryNum = 0L
             if (entriesArr != null) {
@@ -188,6 +285,12 @@ class ChunkedBackupManager(
                 "documentsCount" to docCount,
                 "journalLinesCount" to lineCount,
                 "partiesCount" to partyCount,
+                "packagesCount" to pkgCount,
+                "treasuriesCount" to trCount,
+                "assetsCount" to assetCount,
+                "allocationsCount" to allocCount,
+                "currencyRatesCount" to rateCount,
+                "networkDevicesCount" to netDevCount,
                 "lastEntryNumber" to maxEntryNum,
                 "isEncrypted" to !passphrase.isNullOrBlank()
             )
@@ -204,8 +307,9 @@ class ChunkedBackupManager(
 
             loadLastMetadata()
 
-            val msg = "تم رفع النسخة الاحتياطية بنجاح ($docCount وثيقة، $lineCount سطر قيد، ${chunks.size} أجزاء)"
-            _syncState.value = SyncState.Success(msg, System.currentTimeMillis(), docCount + lineCount)
+            val totalRecords = docCount + lineCount + partyCount + pkgCount + trCount
+            val msg = "تم رفع النسخة الاحتياطية بنجاح ($totalRecords سجلاً، ${chunks.size} أجزاء)"
+            _syncState.value = SyncState.Success(msg, System.currentTimeMillis(), totalRecords)
             Result.success(msg)
         } catch (e: Exception) {
             Log.e(TAG, "Upload failed: ${e.message}", e)
@@ -215,7 +319,7 @@ class ChunkedBackupManager(
     }
 
     /**
-     * Lists existing cloud backups for the user.
+     * Lists existing cloud backups for the user (last 5).
      */
     suspend fun listBackups(explicitUid: String? = null): List<BackupManifest> = withContext(Dispatchers.IO) {
         val uid = getAuthenticatedUid(explicitUid)
@@ -226,7 +330,7 @@ class ChunkedBackupManager(
             val snapshot = fs.collection("users").document(uid)
                 .collection("backups")
                 .orderBy("createdAt", Query.Direction.DESCENDING)
-                .limit(10)
+                .limit(MAX_RETAINED_BACKUPS.toLong())
                 .get()
                 .await()
 
@@ -250,6 +354,12 @@ class ChunkedBackupManager(
                         documentsCount = doc.getLong("documentsCount")?.toInt() ?: 0,
                         journalLinesCount = doc.getLong("journalLinesCount")?.toInt() ?: 0,
                         partiesCount = doc.getLong("partiesCount")?.toInt() ?: 0,
+                        packagesCount = doc.getLong("packagesCount")?.toInt() ?: 0,
+                        treasuriesCount = doc.getLong("treasuriesCount")?.toInt() ?: 0,
+                        assetsCount = doc.getLong("assetsCount")?.toInt() ?: 0,
+                        allocationsCount = doc.getLong("allocationsCount")?.toInt() ?: 0,
+                        currencyRatesCount = doc.getLong("currencyRatesCount")?.toInt() ?: 0,
+                        networkDevicesCount = doc.getLong("networkDevicesCount")?.toInt() ?: 0,
                         lastEntryNumber = doc.getLong("lastEntryNumber") ?: 0L,
                         isEncrypted = isEncrypted
                     )
@@ -345,7 +455,6 @@ class ChunkedBackupManager(
                 assembledBytes
             }
 
-            // Verify SHA-256 integrity
             val actualSha256 = ChunkedBackupHelper.computeSha256(decryptedBytes)
             if (actualSha256 != expectedSha256) {
                 val err = "فشل التحقق من سلامة البصمة (SHA-256 Mismatch): الملف تالف أو معدّل"
@@ -356,10 +465,8 @@ class ChunkedBackupManager(
             _syncState.value = SyncState.InProgress("فك ضغط واستعادة قاعدة البيانات...", 0.8f)
             val rawJson = ChunkedBackupHelper.decompressGzip(decryptedBytes)
 
-            // Perform atomic restore
             val restoreResult = backupRestoreUseCase.restoreDatabaseFromJson(rawJson)
             if (restoreResult.isFailure) {
-                // Rollback to safety snapshot if restore failed
                 if (localSafetySnapshot != null) {
                     try {
                         backupRestoreUseCase.restoreDatabaseFromJson(localSafetySnapshot)
@@ -372,7 +479,6 @@ class ChunkedBackupManager(
                 return@withContext Result.failure(restoreResult.exceptionOrNull() ?: Exception(err))
             }
 
-            // Post-restore ledger invariant verification
             val postValidation = LedgerInvariants(db).verifyAll()
             if (!postValidation.isValid) {
                 if (localSafetySnapshot != null) {
@@ -401,6 +507,30 @@ class ChunkedBackupManager(
     }
 
     /**
+     * Deletes a specific cloud backup and all its chunks.
+     */
+    suspend fun deleteBackup(backupId: String, explicitUid: String? = null): Result<Unit> = withContext(Dispatchers.IO) {
+        val uid = getAuthenticatedUid(explicitUid)
+        if (uid.isBlank()) return@withContext Result.failure(IllegalStateException("User not authenticated"))
+        val fs = firestore ?: return@withContext Result.failure(IllegalStateException("Firestore unavailable"))
+
+        try {
+            val backupDocRef = fs.collection("users").document(uid)
+                .collection("backups").document(backupId)
+
+            val chunksSnap = backupDocRef.collection("chunks").get().await()
+            for (cDoc in chunksSnap.documents) {
+                cDoc.reference.delete().await()
+            }
+            backupDocRef.delete().await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Delete backup failed: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Prunes older backups beyond MAX_RETAINED_BACKUPS (5).
      */
     private suspend fun pruneOldBackups(uid: String, fs: FirebaseFirestore) {
@@ -414,7 +544,6 @@ class ChunkedBackupManager(
             if (query.documents.size > MAX_RETAINED_BACKUPS) {
                 val excess = query.documents.drop(MAX_RETAINED_BACKUPS)
                 for (doc in excess) {
-                    // Delete chunks
                     val chunksSnap = doc.reference.collection("chunks").get().await()
                     for (cDoc in chunksSnap.documents) {
                         cDoc.reference.delete().await()
@@ -444,11 +573,6 @@ class ChunkedBackupManager(
                     cDoc.reference.delete().await()
                 }
                 bDoc.reference.delete().await()
-            }
-            // Delete legacy collection if exists
-            val legacySnap = userDocRef.collection("backup_latest").get().await()
-            for (lDoc in legacySnap.documents) {
-                lDoc.reference.delete().await()
             }
             userDocRef.delete().await()
             Result.success(Unit)

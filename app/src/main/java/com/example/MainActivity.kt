@@ -322,9 +322,9 @@ class MainActivity : ComponentActivity() {
                 val pendingRestore by appViewModel.pendingCloudRestorePrompt.collectAsState()
                 if (pendingRestore != null) {
                     val backup = pendingRestore!!
-                    val dateStr = if (backup.timestamp > 0L) {
+                    val dateStr = if (backup.createdAt > 0L) {
                         val sdf = java.text.SimpleDateFormat("yyyy/MM/dd HH:mm", java.util.Locale.getDefault())
-                        sdf.format(java.util.Date(backup.timestamp))
+                        sdf.format(java.util.Date(backup.createdAt))
                     } else "غير محدد"
 
                     androidx.compose.material3.AlertDialog(
@@ -342,8 +342,9 @@ class MainActivity : ComponentActivity() {
                         },
                         text = {
                             Column {
+                                val userEmail = appViewModel.currentUser.value?.email ?: ""
                                 Text(
-                                    text = "تم العثور على نسخة احتياطية سحابية سابقة لحسابك (${backup.userEmail}) بتاريخ $dateStr تحتوي على ${backup.documentsCount} مستنداً و ${backup.journalLinesCount} قيداً و ${backup.networkDevicesCount} جهازاً و ${backup.currencyRatesCount} سعر صرف.",
+                                    text = "تم العثور على نسخة احتياطية سحابية سابقة لحسابك ($userEmail) بتاريخ $dateStr تحتوي على ${backup.documentsCount} مستنداً و ${backup.journalLinesCount} قيداً و ${backup.networkDevicesCount} جهازاً و ${backup.currencyRatesCount} سعر صرف.",
                                     style = MaterialTheme.typography.bodyMedium
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))

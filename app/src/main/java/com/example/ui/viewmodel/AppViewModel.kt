@@ -15,13 +15,12 @@ import com.example.data.auth.AuthManager
 import com.example.data.auth.GoogleAuthManager
 import com.example.data.auth.UserProfile
 import com.example.data.auth.UserSession
-import com.example.data.sync.FirebaseSyncManager
-import com.example.data.sync.FirestoreSyncManager
-import com.example.data.sync.SyncLogItem
 import com.example.data.sync.ChunkedBackupManager
+import com.example.data.sync.BackupManifest
+import com.example.data.sync.CompletenessReport
+import com.example.data.sync.ConflictCheckResult
 import com.example.data.sync.SyncMetadata
 import com.example.data.sync.SyncState
-import com.example.data.sync.SyncStatus
 import com.example.data.ledger.InKindAssetItem
 import com.example.data.ledger.InvariantCheckResult
 import com.example.data.ledger.InvoiceAllocationSpec
@@ -113,24 +112,28 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val allRates: StateFlow<List<CurrencyRateEntity>> = db.currencyRateDao().getAllRatesFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // Auth & Firebase Sync
+    // Auth & Chunked Cloud Backup
     val authManager = AuthManager(application)
-    val syncManager = FirestoreSyncManager(application, db, backupRestoreUseCase)
     val googleAuthManager = GoogleAuthManager(application)
-    val firebaseSyncManager = FirebaseSyncManager(application, db)
+    val chunkedBackupManager = ChunkedBackupManager(application, db, backupRestoreUseCase)
 
     val currentUser: StateFlow<UserSession?> = authManager.currentUser
     val authError: StateFlow<String?> = authManager.authError
     val isAuthLoading: StateFlow<Boolean> = authManager.isLoading
 
     val currentUserProfile: StateFlow<UserProfile?> = googleAuthManager.userProfile
-    val syncStatus: StateFlow<SyncStatus> = firebaseSyncManager.syncStatus
-    val lastSyncTimestamp: StateFlow<String?> = firebaseSyncManager.lastSyncTimestamp
-    val autoSyncEnabled: StateFlow<Boolean> = firebaseSyncManager.autoSyncEnabled
 
-    val syncState: StateFlow<SyncState> = syncManager.syncState
-    val syncMetadata: StateFlow<SyncMetadata?> = syncManager.syncMetadata
-    val syncHistory: StateFlow<List<SyncLogItem>> = syncManager.syncHistory
+    val syncState: StateFlow<SyncState> = chunkedBackupManager.syncState
+    val syncMetadata: StateFlow<SyncMetadata?> = chunkedBackupManager.syncMetadata
+
+    private val _cloudBackupsList = MutableStateFlow<List<BackupManifest>>(emptyList())
+    val cloudBackupsList: StateFlow<List<BackupManifest>> = _cloudBackupsList.asStateFlow()
+
+    private val _conflictWarning = MutableStateFlow<String?>(null)
+    val conflictWarning: StateFlow<String?> = _conflictWarning.asStateFlow()
+
+    private val _completenessReport = MutableStateFlow<CompletenessReport?>(null)
+    val completenessReport: StateFlow<CompletenessReport?> = _completenessReport.asStateFlow()
 
     // Base Flows
     val allParties: StateFlow<List<PartyEntity>> = repository.allParties
@@ -193,7 +196,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val userMessage: SharedFlow<String> = _userMessage.asSharedFlow()
 
     // Prompt for restoring remote backup on empty/fresh app
-    val pendingCloudRestorePrompt = MutableStateFlow<com.example.data.sync.CloudBackupMeta?>(null)
+    val pendingCloudRestorePrompt = MutableStateFlow<BackupManifest?>(null)
 
     init {
         refreshDashboard()
@@ -205,13 +208,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val user = currentUser.value
-                if (user != null && user.isSignedIn) {
+                if (user != null && user.isSignedIn && user.uid.isNotBlank()) {
                     val docCount = db.documentDao().getAllDocumentsSync().size
                     val linesCount = db.journalDao().getAllLinesSync().size
                     if (docCount == 0 && linesCount == 0) {
-                        val meta = syncManager.checkRemoteBackup(user.uid, user.email)
-                        if (meta != null && meta.totalRecords > 0) {
-                            pendingCloudRestorePrompt.value = meta
+                        val backups = chunkedBackupManager.listBackups(user.uid)
+                        if (backups.isNotEmpty()) {
+                            pendingCloudRestorePrompt.value = backups.first()
                         }
                     }
                 }
@@ -228,7 +231,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun restorePendingCloudBackup() {
         val prompt = pendingCloudRestorePrompt.value ?: return
         pendingCloudRestorePrompt.value = null
-        restoreFromCloud(prompt.uid, prompt.userEmail)
+        restoreChunkedBackup(prompt.backupId)
     }
 
     fun refreshDashboard() {
@@ -1392,54 +1395,103 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun restoreFromCloud(targetUid: String? = null, targetEmail: String? = null) {
-        val user = currentUser.value
-        val uid = targetUid ?: user?.uid ?: ""
-        val email = targetEmail ?: user?.email ?: ""
-        if (uid.isBlank() && email.isBlank()) {
-            viewModelScope.launch {
-                _userMessage.emit("يرجى تسجيل الدخول بحساب Google أولاً لتحديد النسخة السحابية")
-            }
-            return
-        }
-        viewModelScope.launch {
-            val res = syncManager.syncPull(uid, email)
-            if (res.isSuccess) {
-                _userMessage.emit(res.getOrNull() ?: "تمت استعادة البيانات من السحابة بنجاح")
-                refreshDashboard()
-                runInvariantCheck()
-            } else {
-                _userMessage.emit(res.exceptionOrNull()?.localizedMessage ?: "فشل استعادة البيانات السحابية")
-            }
-        }
-    }
+    // --- Chunked Cloud Backup Operations (Single Source of Truth) ---
 
-    fun syncPushToFirebase() {
+    fun fetchCloudBackupsList() {
         val user = currentUser.value
         val uid = user?.uid ?: ""
-        val email = user?.email ?: ""
-        if (uid.isBlank() && email.isBlank()) {
+        if (uid.isBlank()) {
+            _cloudBackupsList.value = emptyList()
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val list = chunkedBackupManager.listBackups(uid)
+            _cloudBackupsList.value = list
+        }
+    }
+
+    fun uploadChunkedBackup(passphrase: String? = null, forceOverwrite: Boolean = false) {
+        val user = currentUser.value
+        val uid = user?.uid ?: ""
+        if (uid.isBlank()) {
             viewModelScope.launch {
-                _userMessage.emit("يرجى تسجيل الدخول بحساب Google أولاً لرفع النسخة السحابية")
+                _userMessage.emit("يرجى تسجيل الدخول بحساب Google أولاً لرفع النسخة الاحتياطية")
             }
             return
         }
-        viewModelScope.launch {
-            val res = syncManager.syncPush(uid, email)
+
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!forceOverwrite) {
+                val conflict = chunkedBackupManager.checkConflictBeforeUpload(uid)
+                if (conflict is ConflictCheckResult.Conflict) {
+                    _conflictWarning.value = conflict.warningMessage
+                    return@launch
+                }
+            }
+
+            _conflictWarning.value = null
+            val res = chunkedBackupManager.uploadBackup(uid, passphrase)
             if (res.isSuccess) {
-                _userMessage.emit(res.getOrNull() ?: "تمت المزامنة السحابية بنجاح")
+                _userMessage.emit(res.getOrNull() ?: "تم رفع النسخة الاحتياطية السحابية بنجاح")
+                fetchCloudBackupsList()
             } else {
-                _userMessage.emit(res.exceptionOrNull()?.localizedMessage ?: "فشل الرفع السحابي")
+                _userMessage.emit(res.exceptionOrNull()?.localizedMessage ?: "فشل رفع النسخة السحابية")
             }
         }
     }
 
-    fun syncPullFromFirebase() {
-        restoreFromCloud()
+    fun dismissConflictWarning() {
+        _conflictWarning.value = null
     }
 
-    fun setAutoSync(enabled: Boolean) {
-        firebaseSyncManager.setAutoSync(enabled)
+    fun restoreChunkedBackup(backupId: String, passphrase: String? = null) {
+        val user = currentUser.value
+        val uid = user?.uid ?: ""
+        if (uid.isBlank()) {
+            viewModelScope.launch {
+                _userMessage.emit("يرجى تسجيل الدخول بحساب Google أولاً لاستعادة النسخة")
+            }
+            return
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val res = chunkedBackupManager.restoreBackup(backupId, uid, passphrase)
+            if (res.isSuccess) {
+                _userMessage.emit(res.getOrNull() ?: "تمت استعادة النسخة الاحتياطية بنجاح ومطابقتها 100%")
+                refreshDashboard()
+                runInvariantCheck()
+                _completenessReport.value = null
+            } else {
+                _userMessage.emit(res.exceptionOrNull()?.localizedMessage ?: "فشلت استعادة النسخة السحابية")
+            }
+        }
+    }
+
+    fun deleteChunkedBackup(backupId: String) {
+        val user = currentUser.value
+        val uid = user?.uid ?: ""
+        if (uid.isBlank()) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val res = chunkedBackupManager.deleteBackup(backupId, uid)
+            if (res.isSuccess) {
+                _userMessage.emit("تم حذف النسخة السحابية بنجاح")
+                fetchCloudBackupsList()
+            } else {
+                _userMessage.emit(res.exceptionOrNull()?.localizedMessage ?: "فشل حذف النسخة السحابية")
+            }
+        }
+    }
+
+    fun inspectBackupCompleteness(manifest: BackupManifest) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val report = chunkedBackupManager.generateCompletenessReport(manifest)
+            _completenessReport.value = report
+        }
+    }
+
+    fun clearCompletenessReport() {
+        _completenessReport.value = null
     }
 
     fun signInWithGoogleOneTap(context: android.content.Context) {
@@ -1451,6 +1503,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     authManager.signInDirectly(profile.email, profile.displayName)
                 }
                 _userMessage.emit("تم تسجيل الدخول بنجاح بحساب Google: ${profile?.email}")
+                fetchCloudBackupsList()
                 checkForRemoteBackupIfEmpty()
             } else {
                 val err = res.exceptionOrNull()?.localizedMessage ?: "فشل تسجيل الدخول عبر Google"
@@ -1462,44 +1515,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun signInDirectWithEmail(email: String, displayName: String = "") {
         googleAuthManager.signInDirectWithEmail(email, displayName)
         signInDirectly(email, displayName)
+        fetchCloudBackupsList()
+        checkForRemoteBackupIfEmpty()
     }
 
     fun signOutGoogle() {
         viewModelScope.launch {
             googleAuthManager.signOut()
             authManager.signOut()
+            _cloudBackupsList.value = emptyList()
+            _completenessReport.value = null
+            _conflictWarning.value = null
             _userMessage.emit("تم تسجيل الخروج بنجاح")
-        }
-    }
-
-    fun performCloudSync() {
-        val email = currentUserProfile.value?.email ?: currentUser.value?.email ?: "mosthassan.ye@gmail.com"
-        viewModelScope.launch {
-            val res = firebaseSyncManager.performFullSync(email)
-            if (res.isSuccess) {
-                val count = res.getOrNull() ?: 0
-                _userMessage.emit("اكتملت المزامنة السحابية بنجاح ($count سجل)")
-                refreshDashboard()
-            } else {
-                val err = res.exceptionOrNull()?.localizedMessage ?: "فشلت المزامنة السحابية"
-                _userMessage.emit(err)
-            }
-        }
-    }
-
-    fun performCloudPull() {
-        val email = currentUserProfile.value?.email ?: currentUser.value?.email ?: "mosthassan.ye@gmail.com"
-        viewModelScope.launch {
-            val res = firebaseSyncManager.pullDataFromCloud(email)
-            if (res.isSuccess) {
-                val count = res.getOrNull() ?: 0
-                _userMessage.emit("تم جلب البيانات من السحاب بنجاح ($count سجل)")
-                refreshDashboard()
-                runInvariantCheck()
-            } else {
-                val err = res.exceptionOrNull()?.localizedMessage ?: "فشل جلب البيانات السحابية"
-                _userMessage.emit(err)
-            }
         }
     }
 }

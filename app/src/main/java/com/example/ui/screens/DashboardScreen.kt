@@ -222,12 +222,12 @@ fun DashboardScreen(
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
                                 Text(
-                                    text = "مزامنة Firebase السحابية",
+                                    text = "النسخ الاحتياطي السحابي",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = currentUser?.email ?: "تسجيل الدخول للمزامنة",
+                                    text = currentUser?.email ?: "تسجيل الدخول للنسخ السحابي",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = BrandCyanPrimary,
                                     fontWeight = FontWeight.SemiBold
@@ -241,7 +241,7 @@ fun DashboardScreen(
                             color = if (isSyncing) BrandCyanPrimary.copy(alpha = 0.2f) else SemanticIncomeGreen.copy(alpha = 0.15f)
                         ) {
                             Text(
-                                text = if (isSyncing) "جاري الرفع..." else "سحابة نشطة",
+                                text = if (isSyncing) "جاري الرفع..." else "نسخ سحابي نشط",
                                 color = if (isSyncing) BrandCyanPrimary else SemanticIncomeGreen,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 11.sp,
@@ -257,7 +257,7 @@ fun DashboardScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Button(
-                            onClick = { viewModel.syncPushToFirebase() },
+                            onClick = { viewModel.uploadChunkedBackup() },
                             colors = ButtonDefaults.buttonColors(containerColor = BrandCyanPrimary),
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier
@@ -266,7 +266,7 @@ fun DashboardScreen(
                         ) {
                             Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("مزامنة الآن", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            Text("نسخ احتياطي سحابي", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         }
 
                         OutlinedButton(
