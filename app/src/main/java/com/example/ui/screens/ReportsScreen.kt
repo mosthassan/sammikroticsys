@@ -47,11 +47,19 @@ import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Sync
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
+import com.example.data.sync.BackupManifest
+import com.example.data.sync.CompletenessReport
+import com.example.data.sync.SyncState
+import androidx.compose.material.icons.filled.Assessment
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.ui.platform.LocalContext
-import com.example.data.sync.SyncStatus
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import androidx.compose.material.icons.filled.TrendingDown
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material.icons.filled.Upload
@@ -892,20 +900,33 @@ private fun CloudSyncAndBackupView(viewModel: AppViewModel) {
     val clipboard = LocalClipboardManager.current
 
     val profile by viewModel.currentUserProfile.collectAsState()
-    val syncStatus by viewModel.syncStatus.collectAsState()
-    val lastSyncTime by viewModel.lastSyncTimestamp.collectAsState()
-    val autoSync by viewModel.autoSyncEnabled.collectAsState()
+    val currentUser by viewModel.currentUser.collectAsState()
+    val syncState by viewModel.syncState.collectAsState()
+    val syncMetadata by viewModel.syncMetadata.collectAsState()
+    val backupsList by viewModel.cloudBackupsList.collectAsState()
+    val conflictWarning by viewModel.conflictWarning.collectAsState()
+    val completenessReport by viewModel.completenessReport.collectAsState()
 
     var backupJson by remember { mutableStateOf("") }
     var restoreJsonText by remember { mutableStateOf("") }
     var showRestoreDialog by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
 
+    var backupToRestore by remember { mutableStateOf<BackupManifest?>(null) }
+    var backupToDelete by remember { mutableStateOf<BackupManifest?>(null) }
+    var restorePassphrase by remember { mutableStateOf("") }
+
+    val dateFormat = remember { SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()) }
+
+    LaunchedEffect(Unit) {
+        viewModel.fetchCloudBackupsList()
+    }
+
     LazyColumn(
         verticalArrangement = Arrangement.spacedBy(14.dp),
         modifier = Modifier.fillMaxSize()
     ) {
-        // 1. Google Account & Multi-Tenant ID Card
+        // 1. Google Account & Cloud Backup Path Card
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -938,20 +959,20 @@ private fun CloudSyncAndBackupView(viewModel: AppViewModel) {
                             Spacer(modifier = Modifier.width(12.dp))
                             Column {
                                 Text(
-                                    text = if (profile != null) "حساب Google ومعرّف المزامنة (Tenant ID)" else "تسجيل الدخول بحساب Google",
+                                    text = if (currentUser != null) "حساب النسخ الاحتياطي السحابي" else "تسجيل الدخول السحابي",
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 15.sp,
                                     color = TextPrimaryDark
                                 )
                                 Text(
-                                    text = "البريد الإلكتروني هو المعرّف الوحيد لعزل وتشفير بيانات شبكتك",
+                                    text = "عزل مشفر للبيانات تحت معرف حسابك في السحابة",
                                     fontSize = 11.sp,
                                     color = TextSecondaryDark
                                 )
                             }
                         }
 
-                        if (profile != null) {
+                        if (currentUser != null) {
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
                                 color = StatusOnline.copy(alpha = 0.2f)
@@ -969,7 +990,7 @@ private fun CloudSyncAndBackupView(viewModel: AppViewModel) {
 
                     HorizontalDivider(color = CyberBorder)
 
-                    if (profile != null) {
+                    if (currentUser != null) {
                         // User Signed In Display
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Row(
@@ -977,15 +998,15 @@ private fun CloudSyncAndBackupView(viewModel: AppViewModel) {
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text("اسم الحساب:", color = TextSecondaryDark, fontSize = 12.sp)
-                                Text(profile?.displayName ?: "", color = TextPrimaryDark, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Text(currentUser?.displayName ?: profile?.displayName ?: "", color = TextPrimaryDark, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                             }
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text("البريد الإلكتروني (المعرّف):", color = TextSecondaryDark, fontSize = 12.sp)
+                                Text("البريد الإلكتروني:", color = TextSecondaryDark, fontSize = 12.sp)
                                 Text(
-                                    profile?.email ?: "",
+                                    currentUser?.email ?: profile?.email ?: "",
                                     color = MikroTikCyan,
                                     fontWeight = FontWeight.Black,
                                     fontSize = 13.sp,
@@ -996,9 +1017,9 @@ private fun CloudSyncAndBackupView(viewModel: AppViewModel) {
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text("مسار العزل السحابي (Firestore):", color = TextSecondaryDark, fontSize = 11.sp)
+                                Text("مسار النسخ السحابي:", color = TextSecondaryDark, fontSize = 11.sp)
                                 Text(
-                                    "users/${profile?.uid ?: ""}",
+                                    "users/${currentUser?.uid ?: ""}/backups",
                                     color = TextMutedDark,
                                     fontSize = 10.sp,
                                     fontFamily = FontFamily.Monospace
@@ -1022,7 +1043,7 @@ private fun CloudSyncAndBackupView(viewModel: AppViewModel) {
                         // User Not Signed In - Prominent One-Tap Google Options
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(
-                                text = "اضغط للدخول بحساب Google بنقرة واحدة لربط قاعدة بياناتك بسحابة Firebase المخصصة لك تلقائياً:",
+                                text = "اضغط للدخول بحساب Google لربط النسخ الاحتياطي السحابي الخاص بك:",
                                 fontSize = 12.sp,
                                 color = TextSecondaryDark
                             )
@@ -1044,7 +1065,7 @@ private fun CloudSyncAndBackupView(viewModel: AppViewModel) {
                             ) {
                                 Icon(Icons.Default.Person, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("الدخول بنقرة واحدة عبر حساب Google", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Text("الدخول بحساب Google", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                             }
                         }
                     }
@@ -1052,7 +1073,53 @@ private fun CloudSyncAndBackupView(viewModel: AppViewModel) {
             }
         }
 
-        // 2. Firebase Cloud Sync Hub Card
+        // 2. Multi-Device Conflict Warning Banner
+        conflictWarning?.let { warning ->
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = SemanticWarningAmber.copy(alpha = 0.12f)),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, SemanticWarningAmber, RoundedCornerShape(14.dp))
+                ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Warning, contentDescription = null, tint = SemanticWarningAmber, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("حارس التعارض السحابي (Conflict Guard)", color = SemanticWarningAmber, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        }
+                        Text(
+                            text = warning,
+                            color = TextPrimaryDark,
+                            fontSize = 12.sp
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = { viewModel.uploadChunkedBackup(forceOverwrite = true) },
+                                colors = ButtonDefaults.buttonColors(containerColor = SemanticWarningAmber),
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("استبدال بالقوة (Force Upload)", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                            OutlinedButton(
+                                onClick = { viewModel.dismissConflictWarning() },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("تراجع", fontSize = 11.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Chunked Cloud Backup Hub Card
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -1079,13 +1146,17 @@ private fun CloudSyncAndBackupView(viewModel: AppViewModel) {
                             }
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
-                                Text("مركز المزامنة السحابية (Firebase Firestore)", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextPrimaryDark)
-                                Text("مزامنة فورية ودقيقة للسندات، الفواتير، الأطراف، واليومية", fontSize = 11.sp, color = TextSecondaryDark)
+                                Text("نسخ احتياطي سحابي مقطّع (Chunked Cloud Backup)", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextPrimaryDark)
+                                Text("تجزئة مشفرة (≤ 500KB) مع ضغط Gzip وضمان سلامة IFRS", fontSize = 11.sp, color = TextSecondaryDark)
                             }
+                        }
+
+                        IconButton(onClick = { viewModel.fetchCloudBackupsList() }) {
+                            Icon(Icons.Default.Refresh, contentDescription = "تحديث", tint = MikroTikCyan)
                         }
                     }
 
-                    // Sync Status Badge & Progress
+                    // Sync State & Progress Display
                     Surface(
                         color = CyberDarkCardElevated,
                         shape = RoundedCornerShape(12.dp),
@@ -1096,49 +1167,70 @@ private fun CloudSyncAndBackupView(viewModel: AppViewModel) {
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text("آخر مزامنة ناجحة:", color = TextSecondaryDark, fontSize = 12.sp)
+                                Text("حالة النسخ:", color = TextSecondaryDark, fontSize = 12.sp)
+                                val lastBackupTime = syncMetadata?.lastSyncedAt ?: 0L
                                 Text(
-                                    lastSyncTime ?: "لم تتم المزامنة بعد",
-                                    color = if (lastSyncTime != null) StatusOnline else TextMutedDark,
+                                    if (lastBackupTime > 0L) dateFormat.format(Date(lastBackupTime)) else "لا توجد نسخ سابقة",
+                                    color = if (lastBackupTime > 0L) StatusOnline else TextMutedDark,
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 12.sp
                                 )
                             }
 
-                            when (val status = syncStatus) {
-                                is SyncStatus.InProgress -> {
+                            when (val state = syncState) {
+                                is SyncState.InProgress -> {
                                     Spacer(modifier = Modifier.height(4.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            "جارِ المعالجة المشفرة",
+                                            color = MikroTikCyan,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text("${(state.progress * 100).toInt()}%", color = MikroTikCyan, fontSize = 11.sp)
+                                    }
                                     LinearProgressIndicator(
+                                        progress = { state.progress },
                                         modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
                                         color = MikroTikCyan,
                                         trackColor = CyberBorder
                                     )
                                     Text(
-                                        status.message,
-                                        color = MikroTikCyan,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Medium
+                                        state.message,
+                                        color = TextSecondaryDark,
+                                        fontSize = 11.sp
                                     )
                                 }
-                                is SyncStatus.Success -> {
-                                    Text(
-                                        "✓ اكتملت المزامنة بنجاح (${status.recordsSynced} سجل في سحابة Firebase)",
-                                        color = StatusOnline,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
+                                is SyncState.Success -> {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = StatusOnline, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            state.message,
+                                            color = StatusOnline,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
                                 }
-                                is SyncStatus.Error -> {
-                                    Text(
-                                        "⚠ ${status.errorMessage}",
-                                        color = SemanticExpenseRed,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
+                                is SyncState.Error -> {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Warning, contentDescription = null, tint = SemanticExpenseRed, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            state.message,
+                                            color = SemanticExpenseRed,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
                                 }
-                                is SyncStatus.Idle -> {
+                                is SyncState.Idle -> {
                                     Text(
-                                        "الحالة: جاهز للمزامنة مع مسار المستأجر الخاص بك",
+                                        "الحالة: جاهز لرفع نسخة سحابية جديدة أو الاستعادة",
                                         color = TextSecondaryDark,
                                         fontSize = 11.sp
                                     )
@@ -1147,70 +1239,198 @@ private fun CloudSyncAndBackupView(viewModel: AppViewModel) {
                         }
                     }
 
-                    // Primary Full Cloud Sync Button
+                    // Upload Button
                     Button(
-                        onClick = { viewModel.performCloudSync() },
+                        onClick = { viewModel.uploadChunkedBackup() },
+                        enabled = syncState !is SyncState.InProgress,
                         colors = ButtonDefaults.buttonColors(containerColor = StatusOnline),
                         shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("btn_reports_upload_chunked_backup")
                     ) {
-                        Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("مزامنة سحابية شاملة الآن (Full Cloud Sync)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    }
-
-                    // Directional Push and Pull Actions
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = { viewModel.performCloudSync() },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp),
-                            border = BorderStroke(1.dp, MikroTikCyan.copy(alpha = 0.5f))
-                        ) {
-                            Icon(Icons.Default.CloudUpload, contentDescription = null, tint = MikroTikCyan, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("رفع للسحاب", color = MikroTikCyan, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        if (syncState is SyncState.InProgress) {
+                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("جارِ الرفع المشفر...", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        } else {
+                            Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("رفع نسخة احتياطية سحابية الآن (Cloud Backup)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                         }
-
-                        OutlinedButton(
-                            onClick = { viewModel.performCloudPull() },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp),
-                            border = BorderStroke(1.dp, Color(0xFF3B82F6).copy(alpha = 0.5f))
-                        ) {
-                            Icon(Icons.Default.CloudDownload, contentDescription = null, tint = Color(0xFF3B82F6), modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("جلب من السحاب", color = Color(0xFF3B82F6), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-
-                    // Auto-sync Toggle Row
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("المزامنة التلقائية (Auto-Sync)", fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = TextPrimaryDark)
-                            Text("رفع السندات والفواتير والحركات إلى Firebase تلقائياً", fontSize = 10.sp, color = TextSecondaryDark)
-                        }
-                        Switch(
-                            checked = autoSync,
-                            onCheckedChange = { viewModel.setAutoSync(it) },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = StatusOnline,
-                                checkedTrackColor = StatusOnline.copy(alpha = 0.3f)
-                            )
-                        )
                     }
                 }
             }
         }
 
-        // 3. Local JSON Disaster Recovery Export Section
+        // 4. Last 5 Cloud Backups List
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(BorderStroke(1.dp, CyberBorder), RoundedCornerShape(16.dp))
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "قائمة آخر 5 نسخ سحابية",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = TextPrimaryDark
+                        )
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MikroTikCyan.copy(alpha = 0.15f)
+                        ) {
+                            Text(
+                                text = "${backupsList.size} من 5",
+                                color = MikroTikCyan,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+
+                    if (backupsList.isEmpty()) {
+                        Surface(
+                            color = CyberDarkCardElevated,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text("لا توجد نسخ احتياطية سحابية محفوظة بعد", color = TextSecondaryDark, fontSize = 12.sp)
+                                Text("اضغط على 'رفع نسخة احتياطية سحابية الآن' لإنشاء أول نسخة.", color = TextMutedDark, fontSize = 11.sp)
+                            }
+                        }
+                    } else {
+                        backupsList.forEach { backup ->
+                            Surface(
+                                color = CyberDarkCardElevated,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .border(1.dp, CyberBorder, RoundedCornerShape(12.dp))
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column {
+                                            Text(
+                                                text = dateFormat.format(Date(backup.createdAt)),
+                                                color = TextPrimaryDark,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp
+                                            )
+                                            Text(
+                                                text = "${backup.deviceId} • v${backup.appVersion}",
+                                                color = TextMutedDark,
+                                                fontSize = 10.sp
+                                            )
+                                        }
+
+                                        if (backup.isEncrypted) {
+                                            Surface(
+                                                shape = RoundedCornerShape(6.dp),
+                                                color = SemanticWarningAmber.copy(alpha = 0.2f)
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Icon(Icons.Default.Lock, contentDescription = null, tint = SemanticWarningAmber, modifier = Modifier.size(12.dp))
+                                                    Spacer(modifier = Modifier.width(3.dp))
+                                                    Text("مشفرة", color = SemanticWarningAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            "السندات: ${backup.documentsCount} • القيود: ${backup.journalLinesCount} • الأطراف: ${backup.partiesCount}",
+                                            color = TextSecondaryDark,
+                                            fontSize = 11.sp
+                                        )
+                                        Text(
+                                            "${backup.chunkCount} أجزاء",
+                                            color = MikroTikCyan,
+                                            fontWeight = FontWeight.SemiBold,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+
+                                    HorizontalDivider(color = CyberBorder.copy(alpha = 0.5f))
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        OutlinedButton(
+                                            onClick = { viewModel.inspectBackupCompleteness(backup) },
+                                            modifier = Modifier.weight(1.2f),
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 4.dp)
+                                        ) {
+                                            Icon(Icons.Default.Assessment, contentDescription = null, modifier = Modifier.size(14.dp), tint = MikroTikCyan)
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("تقرير الاكتمال", fontSize = 11.sp, color = MikroTikCyan)
+                                        }
+
+                                        Button(
+                                            onClick = {
+                                                restorePassphrase = ""
+                                                backupToRestore = backup
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = SemanticIncomeGreen),
+                                            modifier = Modifier.weight(1f),
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 4.dp)
+                                        ) {
+                                            Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(14.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("استعادة", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
+
+                                        OutlinedButton(
+                                            onClick = { backupToDelete = backup },
+                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = SemanticExpenseRed),
+                                            border = BorderStroke(1.dp, SemanticExpenseRed.copy(alpha = 0.5f)),
+                                            modifier = Modifier.weight(0.8f),
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 4.dp)
+                                        ) {
+                                            Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(14.dp))
+                                            Spacer(modifier = Modifier.width(2.dp))
+                                            Text("حذف", fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 5. Local JSON Disaster Recovery Export Section
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -1259,7 +1479,7 @@ private fun CloudSyncAndBackupView(viewModel: AppViewModel) {
             }
         }
 
-        // 4. Local JSON Disaster Recovery Import Section
+        // 6. Local JSON Disaster Recovery Import Section
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -1314,11 +1534,171 @@ private fun CloudSyncAndBackupView(viewModel: AppViewModel) {
         }
     }
 
+    // Completeness Report Dialog
+    completenessReport?.let { report ->
+        AlertDialog(
+            onDismissRequest = { viewModel.clearCompletenessReport() },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Assessment, contentDescription = null, tint = MikroTikCyan, modifier = Modifier.size(22.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("تقرير اكتمال النسخة السحابية", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "فحص مقارنة السجلات المحلية مقابل محتويات النسخة السحابية:",
+                        fontSize = 12.sp,
+                        color = TextSecondaryDark
+                    )
+                    HorizontalDivider(color = CyberBorder)
+
+                    report.items.forEach { item ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(item.tableName, fontSize = 12.sp, color = TextPrimaryDark)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "${item.localCount} محلي / ${item.backupCount} سحابي",
+                                    fontSize = 11.sp,
+                                    color = if (item.isMatch) StatusOnline else SemanticWarningAmber,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                if (item.isMatch) {
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = StatusOnline, modifier = Modifier.size(14.dp))
+                                } else {
+                                    Icon(Icons.Default.Warning, contentDescription = null, tint = SemanticWarningAmber, modifier = Modifier.size(14.dp))
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = CyberBorder)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("إجمالي السجلات:", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text(
+                            "${report.totalLocalRecords} محلي • ${report.totalBackupRecords} سحابي",
+                            fontWeight = FontWeight.Bold,
+                            color = MikroTikCyan,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { viewModel.clearCompletenessReport() },
+                    colors = ButtonDefaults.buttonColors(containerColor = MikroTikCyan)
+                ) {
+                    Text("إغلاق", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            }
+        )
+    }
+
+    // Cloud Restore Confirmation Dialog
+    backupToRestore?.let { backup ->
+        AlertDialog(
+            onDismissRequest = { backupToRestore = null },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.CloudDownload, contentDescription = null, tint = SemanticIncomeGreen, modifier = Modifier.size(22.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("تأكيد استعادة النسخة السحابية", fontWeight = FontWeight.Bold)
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "تنبيه: سيتم استبدال البيانات المحلية الحالية بالكامل بالبيانات الواردة في هذه النسخة السحابية المؤرخة في ${dateFormat.format(Date(backup.createdAt))}. سيتم فحص التوازن المحاسبي الصارم قبل اعتماد الحفظ.",
+                        fontSize = 12.sp
+                    )
+
+                    if (backup.isEncrypted) {
+                        OutlinedTextField(
+                            value = restorePassphrase,
+                            onValueChange = { restorePassphrase = it },
+                            label = { Text("كلمة مرور فك التشفير") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val id = backup.backupId
+                        backupToRestore = null
+                        viewModel.restoreChunkedBackup(id, restorePassphrase.ifBlank { null })
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = SemanticIncomeGreen)
+                ) {
+                    Text("تأكيد الاستعادة الآن", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { backupToRestore = null }) {
+                    Text("إلغاء")
+                }
+            }
+        )
+    }
+
+    // Cloud Delete Confirmation Dialog
+    backupToDelete?.let { backup ->
+        AlertDialog(
+            onDismissRequest = { backupToDelete = null },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Delete, contentDescription = null, tint = SemanticExpenseRed, modifier = Modifier.size(22.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("تأكيد حذف النسخة السحابية", fontWeight = FontWeight.Bold)
+                }
+            },
+            text = {
+                Text(
+                    "هل أنت متأكد من حذف هذه النسخة الاحتياطية (${dateFormat.format(Date(backup.createdAt))}) من سحابة Firebase نهائياً؟ هذا الإجراء لا يمكن التراجع عنه.",
+                    fontSize = 12.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val id = backup.backupId
+                        backupToDelete = null
+                        viewModel.deleteChunkedBackup(id)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = SemanticExpenseRed)
+                ) {
+                    Text("تأكيد الحذف", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { backupToDelete = null }) {
+                    Text("إلغاء")
+                }
+            }
+        )
+    }
+
+    // Local JSON Restore Dialog
     if (showRestoreDialog) {
         AlertDialog(
             onDismissRequest = { showRestoreDialog = false },
-            title = { Text("تأكيد استعادة البيانات") },
-            text = { Text("هل أنت متأكد من استعادة هذه النسخة؟ سيتم دمج أو استبدال البيانات والتحقق من صحة دفتر الأستاذ.") },
+            title = { Text("تأكيد استعادة البيانات المحلية") },
+            text = { Text("هل أنت متأكد من استعادة هذه النسخة المحلية؟ سيتم دمج أو استبدال البيانات والتحقق من صحة دفتر الأستاذ.") },
             confirmButton = {
                 Button(
                     onClick = {

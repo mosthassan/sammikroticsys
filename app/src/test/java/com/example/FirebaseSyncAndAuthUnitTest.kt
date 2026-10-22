@@ -3,9 +3,13 @@ package com.example
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.auth.GoogleAuthManager
-import com.example.data.auth.UserProfile
+import com.example.data.auth.AuthManager
 import com.example.data.local.AppDatabase
-import com.example.data.sync.FirebaseSyncManager
+import com.example.data.sync.ChunkedBackupManager
+import com.example.data.sync.BackupManifest
+import com.example.data.sync.TableCompletenessItem
+import com.example.data.sync.CompletenessReport
+import com.example.domain.usecase.BackupRestoreUseCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -21,32 +25,24 @@ class FirebaseSyncAndAuthUnitTest {
 
     private lateinit var context: Context
     private lateinit var authManager: GoogleAuthManager
-    private lateinit var syncManager: FirebaseSyncManager
+    private lateinit var localAuthManager: AuthManager
     private lateinit var db: AppDatabase
+    private lateinit var chunkedBackupManager: ChunkedBackupManager
 
     @Before
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
         db = AppDatabase.createInMemory(context)
         authManager = GoogleAuthManager(context)
-        syncManager = FirebaseSyncManager(context, db)
+        localAuthManager = AuthManager(context)
+        val backupRestoreUseCase = BackupRestoreUseCase(db)
+        chunkedBackupManager = ChunkedBackupManager(context, db, backupRestoreUseCase)
     }
 
     @Test
-    fun testTenantEmailSanitization() {
-        val email = "mosthassan.ye@gmail.com"
-        val tenantKey = syncManager.sanitizeTenantEmail(email)
-        assertEquals("mosthassan_ye_at_gmail_com", tenantKey)
-
-        val emailUpper = "USER.TEST+NET@COMPANY.ORG"
-        val sanitized = syncManager.sanitizeTenantEmail(emailUpper)
-        assertEquals("user_test+net_at_company_org", sanitized)
-    }
-
-    @Test
-    fun testGoogleAuthSessionPersistenceAndTenantBinding() {
-        val testEmail = "mosthassan.ye@gmail.com"
-        val testName = "Mostafa Hassan"
+    fun testGoogleAuthSessionPersistence() {
+        val testEmail = "test_network_admin@example.com"
+        val testName = "Admin User"
 
         // 1. Sign in directly with email
         authManager.signInDirectWithEmail(testEmail, testName)
@@ -65,15 +61,55 @@ class FirebaseSyncAndAuthUnitTest {
     }
 
     @Test
-    fun testAutoSyncConfigurationToggle() {
-        syncManager.setAutoSync(true)
-        assertTrue(syncManager.autoSyncEnabled.value)
+    fun testAuthManagerSessionHandling() {
+        val session = localAuthManager.signInDirectly("test.user@company.com", "Test User")
+        assertEquals("test.user@company.com", session.email)
+        assertEquals("Test User", session.displayName)
+        assertTrue(session.uid.isNotBlank())
+        assertEquals(session, localAuthManager.currentUser.value)
+    }
 
-        syncManager.setAutoSync(false)
-        assertEquals(false, syncManager.autoSyncEnabled.value)
+    @Test
+    fun testChunkedBackupManifestModelAndCompleteness() {
+        val manifest = BackupManifest(
+            backupId = "backup_test_123",
+            createdAt = System.currentTimeMillis(),
+            deviceId = "TestDevice",
+            documentsCount = 10,
+            journalLinesCount = 20,
+            partiesCount = 5,
+            packagesCount = 3,
+            treasuriesCount = 2,
+            assetsCount = 1,
+            allocationsCount = 0,
+            currencyRatesCount = 2,
+            chunkCount = 1,
+            sha256 = "dummy_sha256_hash",
+            isEncrypted = false
+        )
 
-        syncManager.setAutoSync(true)
-        assertEquals(true, syncManager.autoSyncEnabled.value)
+        assertEquals("backup_test_123", manifest.backupId)
+        assertEquals(10, manifest.documentsCount)
+        assertEquals(20, manifest.journalLinesCount)
+
+        val item = TableCompletenessItem(
+            tableName = "documents",
+            localCount = 10,
+            backupCount = 10,
+            isMatch = true
+        )
+        assertTrue(item.isMatch)
+
+        val report = CompletenessReport(
+            backupId = manifest.backupId,
+            backupCreatedAt = manifest.createdAt,
+            deviceId = manifest.deviceId,
+            items = listOf(item),
+            totalLocalRecords = 10,
+            totalBackupRecords = 10
+        )
+        assertEquals(10, report.totalLocalRecords)
+        assertEquals(10, report.totalBackupRecords)
     }
 
     @Test
@@ -84,16 +120,6 @@ class FirebaseSyncAndAuthUnitTest {
         assertTrue("Web client ID should not contain quotes", !clientId.contains("\"") && !clientId.contains("'"))
         assertEquals(clientId.trim(), clientId)
         assertEquals("668455931031-burt9863pi64rshdlmgenejnj27ep0d0.apps.googleusercontent.com", clientId)
-    }
-
-    @Test
-    fun testAuthManagerSessionHandling() {
-        val auth = com.example.data.auth.AuthManager(context)
-        val session = auth.signInDirectly("test.user@company.com", "Test User")
-        assertEquals("test.user@company.com", session.email)
-        assertEquals("Test User", session.displayName)
-        assertTrue(session.uid.isNotBlank())
-        assertEquals(session, auth.currentUser.value)
     }
 
     @Test
