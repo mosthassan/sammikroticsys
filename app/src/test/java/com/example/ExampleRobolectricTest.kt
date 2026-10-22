@@ -18,4 +18,26 @@ class ExampleRobolectricTest {
     val appName = context.getString(R.string.app_name)
     assertEquals("سام ميكروتك", appName)
   }
+
+  @Test
+  fun `launch MainActivity without crash`() {
+    try {
+      val controller = org.robolectric.Robolectric.buildActivity(MainActivity::class.java).setup()
+      org.robolectric.shadows.ShadowLooper.idleMainLooper()
+    } catch (t: Throwable) {
+      println("CRASH_DURING_LAUNCH: ${t.javaClass.name}: ${t.message}")
+      t.printStackTrace(System.out)
+      throw t
+    }
+  }
+
+  @Test
+  fun `test Firebase components initialization`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    println("Firebase apps: ${com.google.firebase.FirebaseApp.getApps(context).size}")
+    val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
+    println("Auth initialized: $auth")
+    val firestore = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+    println("Firestore initialized: $firestore")
+  }
 }

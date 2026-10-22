@@ -1,5 +1,6 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
 import java.io.FileInputStream
+import java.util.Base64
 import java.util.Locale
 import java.util.Properties
 
@@ -34,6 +35,17 @@ val hasReleaseSigning: Boolean = !releaseStoreFilePath.isNullOrBlank() &&
     !releaseKeyPassword.isNullOrBlank() &&
     file(releaseStoreFilePath).exists()
 
+val debugKeystoreFile = rootProject.file("debug.keystore")
+val debugKeystoreBase64File = rootProject.file("debug.keystore.base64")
+if (!debugKeystoreFile.exists() && debugKeystoreBase64File.exists()) {
+  try {
+    val decoded = Base64.getDecoder().decode(debugKeystoreBase64File.readText().trim())
+    debugKeystoreFile.writeBytes(decoded)
+  } catch (_: Exception) {}
+}
+
+val hasDebugKeystore: Boolean = debugKeystoreFile.exists()
+
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
@@ -51,6 +63,14 @@ android {
   }
 
   signingConfigs {
+    if (hasDebugKeystore) {
+      create("debugConfig") {
+        storeFile = debugKeystoreFile
+        storePassword = "android"
+        keyAlias = "androiddebugkey"
+        keyPassword = "android"
+      }
+    }
     if (hasReleaseSigning) {
       create("release") {
         storeFile = file(releaseStoreFilePath!!)
@@ -72,7 +92,9 @@ android {
       }
     }
     debug {
-      // Uses default Android debug signing configuration. No custom keys required.
+      if (hasDebugKeystore) {
+        signingConfig = signingConfigs.getByName("debugConfig")
+      }
     }
   }
   compileOptions {
