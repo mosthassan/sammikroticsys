@@ -29,7 +29,7 @@ class SamMikrotikApp : Application() {
         try {
             if (FirebaseApp.getApps(this).isEmpty()) {
                 val options = FirebaseOptions.Builder()
-                    .setApplicationId(packageName)
+                    .setApplicationId("1:668455931031:android:burt9863pi64rshdlmge")
                     .setProjectId("sammikrotik-prod")
                     .setApiKey("AIzaSyDummyFallbackKeyForOfflineOperation")
                     .build()

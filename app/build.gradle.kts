@@ -52,7 +52,7 @@ android {
 
   defaultConfig {
     applicationId = "com.samtecai.sammikrotic"
-    minSdk = 24
+    minSdk = 26
     targetSdk = 36
     val vCode = (project.findProperty("VERSION_CODE") as? String)?.toIntOrNull() ?: 1
     val vName = (project.findProperty("VERSION_NAME") as? String) ?: "1.0.0"
