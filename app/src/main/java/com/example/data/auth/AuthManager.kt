@@ -59,9 +59,9 @@ class AuthManager(private val context: Context) {
         try {
             if (FirebaseApp.getApps(context).isEmpty()) {
                 val options = FirebaseOptions.Builder()
-                    .setApplicationId("1:668455931031:android:burt9863pi64rshdlmge")
-                    .setProjectId("sammikrotik-prod")
-                    .setApiKey("AIzaSyDummyFallbackKeyForOfflineOperation")
+                    .setApplicationId("1:668455931031:android:6415c94d790b822f3b2dd2")
+                    .setProjectId("sam-mikrotic")
+                    .setApiKey("AIzaSyAPnh9iJyZQdrhF2sYtzq2CKFdibKvK9J4")
                     .build()
                 FirebaseApp.initializeApp(context, options)
             }

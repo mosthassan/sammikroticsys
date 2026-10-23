@@ -29,9 +29,9 @@ class SamMikrotikApp : Application() {
         try {
             if (FirebaseApp.getApps(this).isEmpty()) {
                 val options = FirebaseOptions.Builder()
-                    .setApplicationId("1:668455931031:android:burt9863pi64rshdlmge")
-                    .setProjectId("sammikrotik-prod")
-                    .setApiKey("AIzaSyDummyFallbackKeyForOfflineOperation")
+                    .setApplicationId("1:668455931031:android:6415c94d790b822f3b2dd2")
+                    .setProjectId("sam-mikrotic")
+                    .setApiKey("AIzaSyAPnh9iJyZQdrhF2sYtzq2CKFdibKvK9J4")
                     .build()
                 FirebaseApp.initializeApp(this, options)
             }
@@ -53,7 +53,10 @@ class SamMikrotikApp : Application() {
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             Log.e("SamMikrotikApp", "Uncaught exception on thread ${thread.name}: ${throwable.message}", throwable)
             CrashReportingManager.logNonFatal("FATAL_APP_CRASH", throwable.message ?: "Unknown fatal error", throwable)
-            defaultHandler?.uncaughtException(thread, throwable)
+            // Only terminate process if crash occurred on UI main thread or is fatal JVM Error
+            if (thread == android.os.Looper.getMainLooper().thread || throwable is Error) {
+                defaultHandler?.uncaughtException(thread, throwable)
+            }
         }
     }
 }
